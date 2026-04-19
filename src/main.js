@@ -1,6 +1,6 @@
 // ── CodeMirror 6 ─────────────────────────────────────────────────────────────
 import { EditorView, keymap } from '@codemirror/view'
-import { EditorState } from '@codemirror/state'
+import { EditorState, Prec } from '@codemirror/state'
 import { basicSetup } from 'codemirror'
 import { markdown } from '@codemirror/lang-markdown'
 import { javascript } from '@codemirror/lang-javascript'
@@ -10,10 +10,13 @@ import { oneDark } from '@codemirror/theme-one-dark'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 
+// ── xterm.js ─────────────────────────────────────────────────────────────────
+import { Terminal } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import '@xterm/xterm/css/xterm.css'
+
 // ── DOM refs ─────────────────────────────────────────────────────────────────
 const outputContent = document.getElementById('output-content')
-const consoleOutput = document.getElementById('console-output')
-const consoleInput  = document.getElementById('console-input')
 const editorMount   = document.getElementById('editor-content')
 
 // ── Display functions ────────────────────────────────────────────────────────
@@ -125,24 +128,117 @@ function getChunkAtLine(docText, line) {
 
 // ── Run functions ────────────────────────────────────────────────────────────
 
-function runCode(code) {
+function runCode(code, echo = false) {
+  let err = null
   try {
     evalInSession(code)
-  } catch (err) {
-    displayError(err)
+  } catch (e) {
+    err = e
+    displayError(e)
   }
+  if (echo) consoleAppend(code, err)
 }
 
 function runChunkAtCursor() {
   const docText = editorView.state.doc.toString()
   const cursorLine = editorView.state.doc.lineAt(editorView.state.selection.main.head).number
   const chunk = getChunkAtLine(docText, cursorLine)
-  if (chunk) runCode(chunk.code)
+  if (chunk) runCode(chunk.code, true)
+}
+
+function runNextChunk() {
+  const doc = editorView.state.doc
+  const docText = doc.toString()
+  const cursorLine = doc.lineAt(editorView.state.selection.main.head).number
+  const chunks = getChunks(docText)
+  // Find the first chunk that starts after the current cursor line
+  const currentChunk = chunks.find(c => cursorLine >= c.startLine && cursorLine <= c.endLine)
+  let nextChunk
+  if (currentChunk) {
+    nextChunk = chunks.find(c => c.startLine > currentChunk.endLine)
+  } else {
+    nextChunk = chunks.find(c => c.startLine > cursorLine)
+  }
+  if (!nextChunk) return
+  // Move cursor into the next chunk and run it
+  const targetLine = doc.line(Math.min(nextChunk.startLine + 1, doc.lines))
+  editorView.dispatch({ selection: { anchor: targetLine.from }, scrollIntoView: true })
+  runCode(nextChunk.code, true)
 }
 
 function runCurrentLine() {
-  const line = editorView.state.doc.lineAt(editorView.state.selection.main.head)
-  runCode(line.text)
+  const doc = editorView.state.doc
+  const docText = doc.toString()
+  const cursorLine = doc.lineAt(editorView.state.selection.main.head).number
+  const chunk = getChunkAtLine(docText, cursorLine)
+  if (!chunk) return
+
+  // Lines of code inside the chunk (1-based; chunk fence lines excluded)
+  const codeStartLine = chunk.startLine + 1
+  const codeLines = chunk.code.split('\n')
+
+  // Cursor position relative to the code lines (0-based index)
+  const cursorIdx = cursorLine - codeStartLine
+  if (cursorIdx < 0 || cursorIdx >= codeLines.length) return
+
+  // Distinguish incomplete JS (needs more input) from invalid JS (real error).
+  // "Unexpected end of input" / "Unexpected token }" at EOI = incomplete.
+  function parseStatus(code) {
+    try {
+      new Function(code)
+      return 'complete'
+    } catch (e) {
+      const msg = e.message.toLowerCase()
+      // Incomplete indicators across engines:
+      // V8/Chrome: "unexpected end of input"
+      // SpiderMonkey/Firefox: "expected expression, got end of script"
+      //                       "expected '}'" / "expected ']'" / "expected ')'"
+      //                       "unterminated string literal"
+      // All engines: "unterminated" anything
+      if (
+        /unexpected end of input/.test(msg) ||
+        /got end of script/.test(msg) ||
+        /expected.*[}\])]/.test(msg) ||
+        /unterminated/.test(msg)
+      ) {
+        return 'incomplete'
+      }
+      return 'invalid'
+    }
+  }
+
+  // Expand upward from cursor to find statement start
+  let startIdx = cursorIdx
+  while (startIdx > 0) {
+    const candidate = codeLines.slice(startIdx, cursorIdx + 1).join('\n')
+    const status = parseStatus(candidate)
+    if (status !== 'invalid') break  // complete or incomplete — good start
+    startIdx--
+  }
+
+  // Expand downward only if the code is incomplete (not invalid)
+  let endIdx = cursorIdx
+  while (endIdx < codeLines.length - 1) {
+    const candidate = codeLines.slice(startIdx, endIdx + 1).join('\n')
+    const status = parseStatus(candidate)
+    if (status === 'complete') break
+    if (status === 'invalid') break  // real error — don't keep expanding
+    endIdx++
+  }
+
+  const statement = codeLines.slice(startIdx, endIdx + 1).join('\n')
+  runCode(statement, true)
+
+  // Move cursor to the next line after the executed statement (within chunk)
+  const nextLineNum = codeStartLine + endIdx + 1
+  const chunkCodeEndLine = chunk.endLine - 1  // last code line (before closing fence)
+  if (nextLineNum <= chunkCodeEndLine) {
+    const nextLine = doc.line(nextLineNum)
+    editorView.dispatch({
+      selection: { anchor: nextLine.from },
+      scrollIntoView: true,
+    })
+  }
 }
 
 function runAll() {
@@ -156,69 +252,186 @@ function runAll() {
 window.runAll = runAll
 window.clearOutput = clearOutput
 
-// ── REPL ─────────────────────────────────────────────────────────────────────
+// ── xterm Console ────────────────────────────────────────────────────────────
 const replHistory = []
 let historyIdx = -1
-let drafText = ''
+let draftText = ''
+let currentLine = ''
+let cursorPos = 0
+
+const term = new Terminal({
+  fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace",
+  fontSize: 13,
+  theme: {
+    background: '#1e1e2e',
+    foreground: '#cdd6f4',
+    cursor: '#f5e0dc',
+    selectionBackground: '#585b7066',
+    green: '#a6e3a1',
+    red: '#f38ba8',
+    yellow: '#f9e2af',
+    cyan: '#94e2d5',
+  },
+  cursorBlink: true,
+  convertEol: true,
+})
+
+const fitAddon = new FitAddon()
+term.loadAddon(fitAddon)
+term.open(document.getElementById('terminal'))
+fitAddon.fit()
+
+// Refit on resize
+const termContainer = document.getElementById('terminal')
+const resizeObs = new ResizeObserver(() => { try { fitAddon.fit() } catch {} })
+resizeObs.observe(termContainer)
+
+const PROMPT = '\x1b[36m> \x1b[0m'  // cyan prompt
+
+function writePrompt() {
+  term.write(PROMPT)
+}
+
+function refreshLine() {
+  // Clear current line and rewrite
+  term.write('\r' + PROMPT + currentLine + '\x1b[K')
+  // Move cursor to correct position
+  const back = currentLine.length - cursorPos
+  if (back > 0) term.write(`\x1b[${back}D`)
+}
 
 function consoleAppend(code, err) {
-  const entry = document.createElement('div')
-  entry.className = 'console-entry'
-  const inputLine = document.createElement('div')
-  inputLine.className = 'console-entry-input'
-  inputLine.textContent = code.trim()
-  entry.appendChild(inputLine)
-  if (err) {
-    const errLine = document.createElement('div')
-    errLine.className = 'console-entry-error'
-    errLine.textContent = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
-    entry.appendChild(errLine)
-  } else {
-    const okLine = document.createElement('div')
-    okLine.className = 'console-entry-ok'
-    okLine.textContent = '✓'
-    entry.appendChild(okLine)
+  const lines = code.trim().split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    if (i === 0) {
+      term.writeln('\x1b[36m> \x1b[0m' + lines[i])
+    } else {
+      term.writeln('\x1b[36m  \x1b[0m' + lines[i])
+    }
   }
-  consoleOutput.appendChild(entry)
-  consoleOutput.scrollTop = consoleOutput.scrollHeight
+  if (err) {
+    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+    term.writeln('\x1b[31m' + msg + '\x1b[0m')
+  } else {
+    term.writeln('\x1b[32m✓\x1b[0m')
+  }
+  writePrompt()
 }
 
 function replRun() {
-  const code = consoleInput.value
-  if (!code.trim()) return
+  const code = currentLine
+  currentLine = ''
+  cursorPos = 0
+  term.write('\r\n')
+  if (!code.trim()) { writePrompt(); return }
   replHistory.push(code)
   historyIdx = -1
-  drafText = ''
+  draftText = ''
   let err = null
   try { evalInSession(code) } catch (e) { err = e; displayError(e) }
-  consoleAppend(code, err)
-  consoleInput.value = ''
-  consoleInput.focus()
+  if (err) {
+    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+    term.writeln('\x1b[31m' + msg + '\x1b[0m')
+  } else {
+    term.writeln('\x1b[32m✓\x1b[0m')
+  }
+  writePrompt()
 }
 
 window.replRun = replRun
 
-consoleInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); replRun(); return }
-  if (e.key === 'ArrowUp') {
-    if (replHistory.length === 0) return
-    e.preventDefault()
-    if (historyIdx === -1) { drafText = consoleInput.value; historyIdx = replHistory.length - 1 }
-    else if (historyIdx > 0) { historyIdx-- }
-    consoleInput.value = replHistory[historyIdx]
-    consoleInput.selectionStart = consoleInput.selectionEnd = consoleInput.value.length
-    return
+term.onData((data) => {
+  for (let i = 0; i < data.length; i++) {
+    const ch = data[i]
+    const code = ch.charCodeAt(0)
+
+    if (ch === '\r' || ch === '\n') {
+      // Enter
+      replRun()
+    } else if (code === 127 || code === 8) {
+      // Backspace
+      if (cursorPos > 0) {
+        currentLine = currentLine.slice(0, cursorPos - 1) + currentLine.slice(cursorPos)
+        cursorPos--
+        refreshLine()
+      }
+    } else if (ch === '\x1b' && data[i + 1] === '[') {
+      // Escape sequence
+      const seq = data[i + 2]
+      if (seq === 'A') {
+        // Arrow Up - history
+        if (replHistory.length > 0) {
+          if (historyIdx === -1) { draftText = currentLine; historyIdx = replHistory.length - 1 }
+          else if (historyIdx > 0) { historyIdx-- }
+          currentLine = replHistory[historyIdx]
+          cursorPos = currentLine.length
+          refreshLine()
+        }
+        i += 2
+      } else if (seq === 'B') {
+        // Arrow Down - history
+        if (historyIdx !== -1) {
+          if (historyIdx < replHistory.length - 1) { historyIdx++; currentLine = replHistory[historyIdx] }
+          else { historyIdx = -1; currentLine = draftText }
+          cursorPos = currentLine.length
+          refreshLine()
+        }
+        i += 2
+      } else if (seq === 'C') {
+        // Arrow Right
+        if (cursorPos < currentLine.length) { cursorPos++; term.write('\x1b[C') }
+        i += 2
+      } else if (seq === 'D') {
+        // Arrow Left
+        if (cursorPos > 0) { cursorPos--; term.write('\x1b[D') }
+        i += 2
+      } else if (seq === '3' && data[i + 3] === '~') {
+        // Delete key
+        if (cursorPos < currentLine.length) {
+          currentLine = currentLine.slice(0, cursorPos) + currentLine.slice(cursorPos + 1)
+          refreshLine()
+        }
+        i += 3
+      } else {
+        i += 2  // skip unknown escape sequences
+      }
+    } else if (code === 3) {
+      // Ctrl+C — copy selection, or clear input if nothing selected
+      const sel = term.getSelection()
+      if (sel) {
+        navigator.clipboard.writeText(sel)
+        term.clearSelection()
+      } else {
+        currentLine = ''
+        cursorPos = 0
+        term.write('^C\r\n')
+        writePrompt()
+      }
+    } else if (code === 22) {
+      // Ctrl+V — paste from clipboard
+      navigator.clipboard.readText().then(text => {
+        if (!text) return
+        const clean = text.replace(/[\r\n]+/g, ' ')
+        currentLine = currentLine.slice(0, cursorPos) + clean + currentLine.slice(cursorPos)
+        cursorPos += clean.length
+        refreshLine()
+      })
+    } else if (code === 12) {
+      // Ctrl+L — clear terminal
+      term.clear()
+      writePrompt()
+      term.write(currentLine)
+    } else if (code >= 32) {
+      // Printable character
+      currentLine = currentLine.slice(0, cursorPos) + ch + currentLine.slice(cursorPos)
+      cursorPos++
+      refreshLine()
+    }
   }
-  if (e.key === 'ArrowDown') {
-    if (historyIdx === -1) return
-    e.preventDefault()
-    if (historyIdx < replHistory.length - 1) { historyIdx++; consoleInput.value = replHistory[historyIdx] }
-    else { historyIdx = -1; consoleInput.value = drafText }
-    consoleInput.selectionStart = consoleInput.selectionEnd = consoleInput.value.length
-    return
-  }
-  historyIdx = -1
 })
+
+// Initial prompt
+writePrompt()
 
 // ── Demo document ────────────────────────────────────────────────────────────
 
@@ -265,9 +478,21 @@ displayPlot(chart)
 \`\`\`
 `
 
+function insertChunk() {
+  const pos = editorView.state.selection.main.head
+  const template = '\n```js\n\n```\n'
+  editorView.dispatch({
+    changes: { from: pos, insert: template },
+    selection: { anchor: pos + 5 },  // cursor inside the empty chunk
+  })
+  editorView.focus()
+}
+
+window.insertChunk = insertChunk
+
 // ── CodeMirror 6 editor ─────────────────────────────────────────────────────
 
-const jsAnalystKeymap = keymap.of([
+const jsAnalystKeymap = Prec.highest(keymap.of([
   {
     key: 'Ctrl-Enter',
     run() { runCurrentLine(); return true },
@@ -276,7 +501,15 @@ const jsAnalystKeymap = keymap.of([
     key: 'Ctrl-Shift-Enter',
     run() { runChunkAtCursor(); return true },
   },
-])
+  {
+    key: 'Ctrl-Shift-n',
+    run() { runNextChunk(); return true },
+  },
+  {
+    key: 'Ctrl-Alt-i',
+    run() { insertChunk(); return true },
+  },
+]))
 
 const editorView = new EditorView({
   state: EditorState.create({
@@ -298,6 +531,80 @@ const editorView = new EditorView({
 
 // Expose for toolbar buttons
 window.runChunkAtCursor = runChunkAtCursor
+
+// ── File I/O ─────────────────────────────────────────────────────────────────
+
+let fileHandle = null
+let currentFilename = 'demo.md'
+const filenameEl = document.getElementById('filename')
+
+function setFilename(name) {
+  currentFilename = name
+  filenameEl.textContent = name
+  document.title = `${name} — JSAnalyst`
+}
+
+const hasNativeFS = typeof window.showOpenFilePicker === 'function'
+
+async function openFile() {
+  try {
+    if (hasNativeFS) {
+      const [handle] = await window.showOpenFilePicker({
+        types: [{ description: 'Markdown', accept: { 'text/markdown': ['.md', '.qmd'] } }],
+      })
+      fileHandle = handle
+      const file = await handle.getFile()
+      const text = await file.text()
+      editorView.dispatch({ changes: { from: 0, to: editorView.state.doc.length, insert: text } })
+      setFilename(handle.name)
+    } else {
+      // Fallback: hidden file input
+      const input = document.createElement('input')
+      input.type = 'file'
+      input.accept = '.md,.qmd,text/markdown'
+      input.onchange = async () => {
+        const file = input.files[0]
+        if (!file) return
+        const text = await file.text()
+        editorView.dispatch({ changes: { from: 0, to: editorView.state.doc.length, insert: text } })
+        setFilename(file.name)
+      }
+      input.click()
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') displayError(e)
+  }
+}
+
+async function saveFile() {
+  try {
+    if (hasNativeFS) {
+      if (!fileHandle) {
+        fileHandle = await window.showSaveFilePicker({
+          suggestedName: currentFilename,
+          types: [{ description: 'Markdown', accept: { 'text/markdown': ['.md', '.qmd'] } }],
+        })
+      }
+      const writable = await fileHandle.createWritable()
+      await writable.write(editorView.state.doc.toString())
+      await writable.close()
+      setFilename(fileHandle.name)
+    } else {
+      // Fallback: download
+      const blob = new Blob([editorView.state.doc.toString()], { type: 'text/markdown' })
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = currentFilename
+      a.click()
+      URL.revokeObjectURL(a.href)
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') displayError(e)
+  }
+}
+
+window.openFile = openFile
+window.saveFile = saveFile
 
 // Run all on load
 runAll()

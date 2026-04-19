@@ -223,78 +223,33 @@
       min-height: 0;
     }
 
-    #console-output {
+    #terminal {
       flex: 1;
-      overflow-y: auto;
-      padding: 4px 12px;
-      font-family: var(--font-mono);
-      font-size: 12px;
-      line-height: 1.5;
+      overflow: hidden;
     }
 
-    #console-input-row {
-      display: flex;
-      align-items: flex-start;
-      border-top: 1px solid var(--border);
-      padding: 6px 10px;
-      gap: 8px;
-      flex-shrink: 0;
-    }
+    /* ── Help dialog ─────────────────────────────────────────────────────── */
 
-    #console-prompt {
-      padding-top: 6px;
-      color: var(--green);
-      font-family: var(--font-mono);
-      font-size: 13px;
-      flex-shrink: 0;
-      user-select: none;
-    }
-
-    #console-input {
-      flex: 1;
-      background: transparent;
-      border: none;
-      outline: none;
+    #help-dialog {
+      background: var(--bg-surface);
       color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px 24px;
+      max-width: 420px;
+    }
+    #help-dialog::backdrop { background: rgba(0,0,0,0.5); }
+    #help-dialog h3 { color: var(--blue); margin-bottom: 12px; font-size: 14px; }
+    #help-dialog table { width: 100%; border-collapse: collapse; }
+    #help-dialog td { padding: 4px 0; font-size: 12px; }
+    #help-dialog td:first-child { padding-right: 16px; white-space: nowrap; }
+    kbd {
+      background: var(--bg-overlay);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 1px 5px;
       font-family: var(--font-mono);
-      font-size: 12.5px;
-      resize: none;
-      height: 52px;
-      line-height: 1.5;
-    }
-    #console-input::placeholder { color: var(--text-dim); }
-
-    #console-run-btn { align-self: flex-end; }
-
-    /* ── Console history entries ─────────────────────────────────────────── */
-
-    .console-entry {
-      padding: 2px 0 4px;
-      border-bottom: 1px solid rgba(69, 71, 90, 0.25);
-      margin-bottom: 3px;
-    }
-
-    .console-entry-input {
-      color: var(--text-dim);
-      white-space: pre-wrap;
-      word-break: break-all;
-    }
-    .console-entry-input::before {
-      content: '> ';
-      color: var(--green);
-    }
-
-    .console-entry-error {
-      color: var(--red);
-      white-space: pre-wrap;
-      word-break: break-all;
-      padding-left: 14px;
-    }
-
-    .console-entry-ok {
-      color: var(--teal);
-      font-size: 10px;
-      padding-left: 14px;
+      font-size: 11px;
     }
   </style>
 </head>
@@ -306,14 +261,17 @@
   <div id="toolbar">
     <span id="app-name">JSAnalyst</span>
     <div class="sep"></div>
-    <button disabled title="File System Access API — Phase 4">Open</button>
-    <button disabled title="File System Access API — Phase 4">Save</button>
+    <button onclick="openFile()">Open</button>
+    <button onclick="saveFile()">Save</button>
     <div class="sep"></div>
     <button onclick="runChunkAtCursor()">Run Chunk</button>
     <button onclick="runAll()">Run All</button>
     <div class="sep"></div>
     <button onclick="clearOutput()">Clear Output</button>
     <button onclick="clearSession()">Clear Session</button>
+    <div class="sep"></div>
+    <button onclick="insertChunk()">+ Chunk</button>
+    <button onclick="toggleHelp()">?</button>
     <span id="filename">demo.md</span>
   </div>
 
@@ -337,19 +295,34 @@
   <!-- ── Console ── -->
   <div id="console-pane">
     <div class="pane-header">Console</div>
-    <div id="console-output"></div>
-    <div id="console-input-row">
-      <span id="console-prompt">&gt;</span>
-      <textarea
-        id="console-input"
-        placeholder="Type JS here. Shift+Enter to run. ↑/↓ for history. display(), displayTable(), displayPlot(), aq, Plot, d3 are all available."
-      ></textarea>
-      <button id="console-run-btn" onclick="replRun()">Run</button>
-    </div>
+    <div id="terminal"></div>
   </div>
 
 </div>
 
 <script type="module" src="/src/main.js"></script>
+
+<!-- Keyboard shortcuts dialog -->
+<dialog id="help-dialog">
+  <h3>Keyboard Shortcuts</h3>
+  <table>
+    <tr><td><kbd>Ctrl+Enter</kbd></td><td>Run current statement &amp; advance</td></tr>
+    <tr><td><kbd>Ctrl+Shift+Enter</kbd></td><td>Run current chunk</td></tr>
+    <tr><td><kbd>Ctrl+Shift+N</kbd></td><td>Run next chunk</td></tr>
+    <tr><td><kbd>Ctrl+Alt+I</kbd></td><td>Insert new chunk</td></tr>
+    <tr><td><kbd>Enter</kbd></td><td>Submit console input</td></tr>
+    <tr><td><kbd>&uarr; / &darr;</kbd></td><td>Console history</td></tr>
+    <tr><td><kbd>Ctrl+C</kbd></td><td>Clear console input</td></tr>
+    <tr><td><kbd>Ctrl+L</kbd></td><td>Clear console</td></tr>
+  </table>
+  <button onclick="this.closest('dialog').close()" style="margin-top:10px">Close</button>
+</dialog>
+
+<script>
+function toggleHelp() {
+  const d = document.getElementById('help-dialog')
+  d.open ? d.close() : d.showModal()
+}
+</script>
 </body>
 </html>
