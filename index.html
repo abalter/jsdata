@@ -149,9 +149,26 @@
 
     /* ── Output pane ─────────────────────────────────────────────────────── */
 
+    .tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 4px 8px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      font-family: var(--font-ui);
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--blue); border-bottom-color: var(--blue); }
+
+    .tab-panel { display: none; overflow: auto; min-height: 0; }
+    .tab-panel.active { display: flex; flex-direction: column; flex: 1; }
+
     #output-content {
-      flex: 1;
-      overflow: auto;
       padding: 12px 14px;
     }
 
@@ -228,6 +245,215 @@
       overflow: hidden;
     }
 
+    /* ── Variable explorer ───────────────────────────────────────────── */
+
+    #vars-content {
+      padding: 8px 12px;
+    }
+
+    .vars-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+    .vars-table th {
+      text-align: left;
+      color: var(--text-dim);
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 4px 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    .vars-table td {
+      padding: 3px 8px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+      cursor: pointer;
+    }
+    .vars-table tr:hover td {
+      background: var(--bg-overlay);
+    }
+    .var-name { color: var(--blue); }
+    .var-type { color: var(--text-dim); font-size: 10px; }
+    .var-preview {
+      color: var(--text-dim);
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* ── View tab ─────────────────────────────────────────────────────── */
+
+    #view-content {
+      padding: 0;
+    }
+
+    .view-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+    .view-header .view-name { color: var(--blue); font-weight: 600; }
+    .view-header .view-dims { color: var(--text-dim); }
+
+    /* Sortable table */
+    .view-table-wrap { flex: 1; overflow: auto; }
+    .view-table {
+      border-collapse: collapse;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      min-width: 100%;
+    }
+    .view-table th {
+      position: sticky;
+      top: 0;
+      background: var(--bg-surface);
+      color: var(--blue);
+      padding: 5px 12px;
+      text-align: left;
+      border-bottom: 2px solid var(--border);
+      font-weight: 600;
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .view-table th:hover { color: var(--text); }
+    .view-table th .sort-arrow { color: var(--text-dim); font-size: 9px; margin-left: 3px; }
+    .view-table td {
+      padding: 3px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+      white-space: nowrap;
+    }
+    .view-table tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+    .view-table tr:hover td { background: var(--bg-overlay); }
+
+    /* JSON tree */
+    .json-tree { padding: 8px 12px; flex: 1; overflow: auto; }
+    .json-tree ul { list-style: none; padding-left: 18px; margin: 0; }
+    .json-tree > ul { padding-left: 0; }
+    .json-node { line-height: 1.6; font-family: var(--font-mono); font-size: 11px; }
+    .json-key { color: var(--blue); }
+    .json-str { color: var(--green); }
+    .json-num { color: var(--mauve); }
+    .json-bool { color: var(--yellow); }
+    .json-null { color: var(--text-dim); font-style: italic; }
+    .json-toggle {
+      cursor: pointer;
+      user-select: none;
+      color: var(--text-dim);
+      display: inline-block;
+      width: 14px;
+      text-align: center;
+      font-size: 10px;
+    }
+    .json-toggle:hover { color: var(--text); }
+    .json-bracket { color: var(--text-dim); }
+    .json-collapsed > ul { display: none; }
+    .json-ellipsis { color: var(--text-dim); font-style: italic; display: none; }
+    .json-collapsed > .json-ellipsis { display: inline; }
+
+    /* ── Chunk buttons ────────────────────────────────────────────────────── */
+
+    .chunk-buttons {
+      float: right;
+      display: inline-flex;
+      gap: 2px;
+      padding-right: 8px;
+    }
+
+    .chunk-btn {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 12px;
+      line-height: 1;
+      padding: 2px 5px;
+      opacity: 0.6;
+      transition: background 0.15s, color 0.15s, opacity 0.15s;
+    }
+
+    .chunk-btn:hover {
+      opacity: 1;
+      background: var(--bg-surface);
+      color: var(--text);
+    }
+
+    .chunk-btn-run {
+      color: var(--accent);
+      opacity: 0.8;
+    }
+
+    .chunk-btn-run:hover {
+      opacity: 1;
+      background: var(--accent);
+      color: var(--bg-base);
+    }
+
+    /* ── Inline chunk output ─────────────────────────────────────────────── */
+
+    .chunk-output {
+      padding: 8px 14px;
+      background: rgba(0, 0, 0, 0.15);
+      border-left: 3px solid var(--blue);
+      margin: 2px 0;
+      overflow: auto;
+      max-height: 400px;
+    }
+
+    .chunk-output .output-block { margin-bottom: 10px; }
+    .chunk-output .output-block:last-child { margin-bottom: 0; }
+
+    .chunk-output .output-table table {
+      font-size: 11px;
+    }
+
+    .chunk-output .output-text {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    .chunk-output .output-error {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--red);
+      background: rgba(243, 139, 168, 0.08);
+      border-left: 3px solid var(--red);
+      padding: 5px 10px;
+      border-radius: 0 4px 4px 0;
+    }
+
+    .chunk-output-close {
+      position: absolute;
+      top: 4px;
+      right: 6px;
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      font-size: 12px;
+      line-height: 1;
+      padding: 2px 4px;
+      opacity: 0;
+      transition: opacity 0.15s, color 0.15s;
+    }
+    .chunk-output { position: relative; }
+    .chunk-output:hover .chunk-output-close { opacity: 0.7; }
+    .chunk-output-close:hover { opacity: 1 !important; color: var(--red); }
+
     /* ── Help dialog ─────────────────────────────────────────────────────── */
 
     #help-dialog {
@@ -286,8 +512,14 @@
 
     <!-- Output pane -->
     <div class="pane" id="output-pane">
-      <div class="pane-header">Output</div>
-      <div id="output-content"></div>
+      <div class="pane-header">
+        <button class="tab-btn active" data-tab="output-content" onclick="switchTab(this)">Output</button>
+        <button class="tab-btn" data-tab="vars-content" onclick="switchTab(this)">Variables</button>
+        <button class="tab-btn" data-tab="view-content" onclick="switchTab(this)" id="view-tab-btn" style="display:none">View</button>
+      </div>
+      <div id="output-content" class="tab-panel active"></div>
+      <div id="vars-content" class="tab-panel"></div>
+      <div id="view-content" class="tab-panel"></div>
     </div>
 
   </div>
@@ -322,6 +554,13 @@
 function toggleHelp() {
   const d = document.getElementById('help-dialog')
   d.open ? d.close() : d.showModal()
+}
+function switchTab(btn) {
+  const pane = btn.closest('.pane')
+  pane.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'))
+  pane.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'))
+  btn.classList.add('active')
+  document.getElementById(btn.dataset.tab).classList.add('active')
 }
 </script>
 </body>

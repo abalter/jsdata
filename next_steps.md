@@ -43,23 +43,54 @@
 - [x] ResizeObserver auto-fits terminal on pane resize
 
 ## Phase 4C — Chunk UI
-- [ ] Visual control buttons on chunks (CodeMirror widget decorations)
-  - Run chunk, Run all above, Run all below
-- [ ] "Add Chunk" toolbar button (inserts ```js template)
-- [ ] Ctrl+Alt+I inserts a new chunk at cursor
+- [x] Visual control buttons on chunks (CodeMirror widget decorations)
+  - ▶ Run chunk, ⏫ Run all above, ⏬ Run this and below
+- [x] "Add Chunk" toolbar button (inserts ```js template)
+- [x] Ctrl+Alt+I inserts a new chunk at cursor
 
 ## Phase 4D — Chunk Options
-- [ ] Parse chunks with `{js}` syntax (like RMarkdown `{r, echo=FALSE}`)
-- [ ] Support options: label, echo, eval, etc.
-- [ ] Update remark parsing or add post-processing for `{js ...}` headers
+- [x] Parse chunks with `{js}` syntax (like RMarkdown `{r, echo=FALSE}`)
+- [x] Support options: label, eval (echo ready for Phase 5 inline output)
+- [x] Remark `lang`+`meta` parsing handles all variants: `js`, `{js}`, `{js, eval=false}`
+- [x] `eval=false` skips execution in Run All, Run Chunk, and all run-above/below
+- [x] Ctrl+Enter still works in `eval=false` chunks (manual override, like RStudio)
 
 ## Phase 4E — Variable Explorer
-- [ ] New pane (tab or collapsible, next to output)
-- [ ] Shows SESSION_VARS with name, type, preview
-- [ ] Updates after each chunk/console execution
-- [ ] Click to display() a variable
+- [x] Tabbed Output/Variables/View pane (click to switch)
+- [x] Shows SESSION_VARS with name, type, preview (Elements filtered out)
+- [x] Smart type display: table[rows×cols], array[n], function, element, etc.
+- [x] Updates after every evalInSession() and clearSession()
+- [x] View tab with sortable data table for Arquero tables (click column headers to sort)
+- [x] View tab with collapsible JSON tree for objects/arrays (color-coded, lazy rendering)
+- [x] View tab appears on demand, labeled "View: varName"
+- [x] Console returns expression values (not just ✓)
+- [x] Editor-executed code added to console history (arrow key recall)
+- [x] Chunk buttons floated to right edge of fence line
 
-## Phase 5 — Execution Isolation (future)
+## Phase 5 — Inline Output
+- [x] Render chunk output inline in the document (below each chunk)
+- [x] Tables, plots, and text output appear between chunks like RMarkdown/Quarto
+- [x] CodeMirror block widget decorations below closing fence
+- [x] Auto-display last expression value if no explicit display() call
+- [x] Clear inline output on re-run or clear all
+- [x] Batched dispatch via flushInlineOutputs() for efficient multi-chunk runs
+- [x] Position remapping on document changes
+- [x] ✕ close button on individual inline outputs (appears on hover)
+- [x] Ctrl+Enter routes to inline output (not output pane)
+- [x] Console rich display: objects/tables/arrays → Output pane with auto-tab-switch
+- [x] Console primitives shown in green, errors in red
+- [ ] Toggle between inline and side-pane output modes
+
+### Design Notes
+- **Routing**: Console execution → output pane (existing). Chunk execution → inline below chunk (new).
+- **Output pane becomes console-only** — like RStudio's console output area. Chunk output lives in the document.
+- **Widget approach**: `OutputWidget extends WidgetType` anchored at each chunk's closing fence line. `eq()` returns false to always redraw on rerun.
+- **Flow**: Chunk runs → output captured → find chunk endLine → convert to doc position → insert/replace widget decoration.
+- **Height gotcha**: CodeMirror needs widget heights for scrolling. Call `requestMeasure()` after dynamic content (tables, plots) renders.
+- **RStudio nuance**: `print()`/console output still goes to console pane. Only rendered display output (tables, plots) goes inline. This distinction matters more when chunk options (`echo`, `print`) arrive in Phase 4D.
+- **Separate code paths already exist**: `runCode()` for chunks vs `replRun()` for console — routing is just extending `runCode` to capture display output and render it as a widget at `chunkEndPos`.
+
+## Phase 6 — Execution Isolation (future)
 - [ ] Evaluate iframe-based execution for isolated global scope
 - [ ] Or wait for TC39 Compartment API
 - [ ] Current approach (indirect eval + const→var rewrite) works for now
