@@ -14,9 +14,26 @@ The three pillars of the execution model are:
 
 ## Module Inventory
 
+### `src/chunkDetection.js`
+
+Pure module (no DOM, no app state) for locating and classifying code chunks in a document. Exports `ChunkType` (`DISPLAY | EXECUTABLE`), `parseChunkOptions(lang, meta)`, `getChunks(docText)`, and `getChunkAtLine(docText, line)`. `getChunks` returns `{ type, lang, code, options, startLine, endLine }` objects with 1-based line numbers. Executable chunks match the pattern `` ```{js...} ``; display-only chunks match `` ```js `` (no braces) and are never executed. The `isExecutableLang` regex accepts end-of-string as a valid trailing delimiter to handle remark truncating `node.lang` at the first space (e.g. `{js label=foo}` → remark produces `lang="{js"` without trailing delimiter).
+
+### `src/dialog.js`
+
+Minimal wrapper around Shoelace `sl-dialog` for programmatic confirm dialogs. Exports `showConfirmDialog({ message, buttons })` which returns a Promise resolving to the button label the user clicked. Owns the dialog lifecycle (create → show → destroy). Used by `fileManager.js` for unsaved-changes prompts; available to any future module that needs a non-blocking confirm UI.
+
+### `src/preview.js`
+
+Renders a document as clean HTML for the Preview tab. Two exports:
+
+- `segmentDocument(docText)` — splits the document into alternating `{ type: 'prose', text }` and `{ type: 'chunk', chunk }` segments. Uses `getChunks()` to locate chunk boundaries and slices surrounding lines as prose. Pure function; no DOM or app state.
+- `renderPreview(docText, chunkOutputs)` — iterates segments and builds an HTML string. Prose is rendered via `marked.parse()` and sanitized with `DOMPurify`. Display chunks are rendered as `highlight.js`-highlighted code blocks. Executable chunks show their captured output from `chunkOutputs: Map<endLine, innerHTML>` (DOMPurify-sanitized), or a `.chunk-not-run` placeholder if the chunk has not been run yet. The `echo=true` option renders the source code block above the output for executable chunks.
+
+Imported by `main.js` only. Dependencies: `marked`, `dompurify`, `highlight.js/lib/core` + explicit `javascript` language registration.
+
 ### `src/main.js`
 
-The application kernel. Owns everything that requires a live DOM: editor construction, xterm terminal setup, inline output widget system, `evalInSession()`, display functions (`display`, `displayTable`, `displayPlot`, `displayText`, `displayError`), console output formatter (`formatForConsole`, `formatArqueroTable`, `formatError`), chunk detection wrappers (`getChunks`, `getChunkAtLine`), run functions (`runCode`, `runAll`, `runChunkAtCursor`, `runNextChunk`, `runAllAbove`, `runAllBelow`), variable explorer (`updateExplorer`, `viewVariable`, `renderSortableTable`, `renderJsonTree`), and the xterm REPL input loop. Also wires together all other modules at startup: calls `FM.init()`, `Actions.initActions()`, `registerShortcuts()`, attaches the Shoelace `sl-select` delegated listener, and renders file tabs.
+The application kernel. Owns everything that requires a live DOM: editor construction, xterm terminal setup, inline output widget system, `evalInSession()`, display functions (`display`, `displayTable`, `displayPlot`, `displayText`, `displayError`), console output formatter (`formatForConsole`, `formatArqueroTable`, `formatError`), chunk detection wrappers (`getChunks`, `getChunkAtLine`), run functions (`runCode`, `runAll`, `runChunkAtCursor`, `runNextChunk`, `runAllAbove`, `runAllBelow`), variable explorer (`updateExplorer`, `viewVariable`, `renderSortableTable`, `renderJsonTree`), and the xterm REPL input loop. Also owns `chunkOutputs` (a `Map<endLine, innerHTML>` capturing the rendered HTML of each run chunk for the preview pane) and `refreshPreview()`. Wires together all other modules at startup: calls `FM.init()`, `Actions.initActions()`, `registerShortcuts()`, attaches the Shoelace `sl-select` delegated listener, and renders file tabs.
 
 `main.js` intentionally does not own keyboard shortcut binding (delegated to `ctrlEnter.js` for Ctrl+Enter, `shortcuts.js` for global shortcuts, and `jsAnalystKeymap` for remaining CodeMirror shortcuts) or file persistence logic (owned by `fileManager.js`).
 
@@ -40,11 +57,11 @@ Factory for the `loadCSV`, `loadJSON`, and `loadFile` helpers that are injected 
 
 ### `src/actions.js`
 
-Centralised action registry. Receives all app dependencies via `initActions(deps)` and exposes one named export per user-facing action (`newFile`, `openFile`, `saveFile`, `saveFileAs`, `closeFile`, `undo`, `redo`, `insertChunk`, `clearSession`, `runCurrentChunk`, `runAll`, `clearOutputAndRunAll`, `runAllAboveCursor`, `runAllBelowCursor`, `toggleRunOnOpen`, `toggleConsole`, `toggleOutputPane`, `showShortcutsHelp`). Both the Shoelace menu `sl-select` listener and `shortcuts.js` call these exports, ensuring there is exactly one implementation per action. Does not own any logic; every export is a one-liner that delegates to a dep.
+Centralised action registry. Receives all app dependencies via `initActions(deps)` and exposes one named export per user-facing action (`newFile`, `openFile`, `saveFile`, `saveFileAs`, `closeFile`, `undo`, `redo`, `insertChunk`, `clearSession`, `runCurrentChunk`, `runAll`, `clearOutputAndRunAll`, `runAllAboveCursor`, `runAllBelowCursor`, `toggleRunOnOpen`, `toggleConsole`, `toggleOutputPane`, `refreshPreview`, `showShortcutsHelp`). Both the Shoelace menu `sl-select` listener and `shortcuts.js` call these exports, ensuring there is exactly one implementation per action. Does not own any logic; every export is a one-liner that delegates to a dep.
 
 ### `src/shortcuts.js`
 
-Thin wrapper around `tinykeys`. Registers the global keyboard shortcut table (Ctrl+N/O/S/Shift+S, Ctrl+Alt+I, Ctrl+A, Ctrl+R) and nothing else. Intentionally does not handle Ctrl+Enter or Ctrl+Shift+Enter — those remain in the CodeMirror keymap so they respect focus correctly.
+Thin wrapper around `tinykeys`. Registers the global keyboard shortcut table (Ctrl+N/O/S/Shift+S, Ctrl+Alt+I, Ctrl+A, Ctrl+R, Ctrl+Shift+P) and nothing else. Intentionally does not handle Ctrl+Enter or Ctrl+Shift+Enter — those remain in the CodeMirror keymap so they respect focus correctly.
 
 ---
 
@@ -91,6 +108,36 @@ ctrlEnter.js  »  createCtrlEnterExtension.run()
 
 ---
 
+## Data Flow: Run Chunk → Preview Capture
+
+```
+runCode(code, echo, endLine)
+  ├── captureTarget = new div.chunk-output
+  ├── evalInSession(code)
+  ├── display*() writes into captureTarget
+  └── if container has children:
+        chunkOutputs.set(endLine, container.innerHTML)   ← snapshot BEFORE close-btn injected
+        pendingInlineOutputs.push({ endLine, dom: container })
+
+clearOutput()
+  └── chunkOutputs.clear()           ← preview and inline outputs stay in sync
+
+refreshPreview()   (wired to Ctrl+Shift+P and View → Refresh Preview)
+  ├── docText = editorView.state.doc.toString()
+  ├── html = renderPreview(docText, chunkOutputs)
+  │     ├── segmentDocument(docText)  →  prose / chunk segments
+  │     ├── prose  →  marked.parse()  →  DOMPurify.sanitize()
+  │     ├── display chunk  →  hljs.highlight()  →  <pre class="preview-code">
+  │     └── executable chunk:
+  │           chunkOutputs.has(endLine)?
+  │             yes  →  DOMPurify.sanitize(html)  →  <div class="chunk-output-preview">
+  │             no   →  <div class="chunk-not-run">▷ Not yet run</div>
+  └── document.getElementById('preview-content').innerHTML = html
+        + switchTab(previewBtn)
+```
+
+---
+
 ## Key Design Decisions
 
 ### Ephemeral Inline Output
@@ -125,3 +172,4 @@ The Ctrl+Enter handler uses acorn to determine whether a fragment of code is a c
 | Shared `window` scope | User code can overwrite builtins or app globals | No mitigation yet; Phase 9 (iframe) would fix this |
 | xterm.js paste path | Two code paths (customKeyEventHandler bypass + paste event) can race on some browsers | Covered by the `termContainer.addEventListener('paste')` handler taking precedence |
 | `flushInlineOutputs()` must be called after every `runCode()` | Forgetting the call leaves outputs in the pending queue with no position to anchor | All call sites in `main.js` call it immediately after; `ctrlEnterExtension`'s lambda also calls it |
+| Preview shows stale output after document edit | `chunkOutputs` keys are line numbers; editing lines above a chunk shifts its endLine, causing key mismatch | User must re-run the affected chunks and refresh preview; a future fix would track chunk identity by content hash |

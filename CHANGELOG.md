@@ -85,3 +85,32 @@ All notable changes to JSAnalyst, organized by development phase.
 **Built:** `ctrlEnter.js` refactored into a fully self-contained module with no app imports. `getStatementAtCursor()` / `getStatementInfoAtCursor()` use acorn as a parse oracle with a two-phase algorithm: expand downward from the cursor (phase 1); if the cursor is mid-statement (detected as `invalid` in isolation), walk upward to find the statement's true start then expand downward again (phase 2). A false-positive detection step handles acorn's `LabeledStatement` ambiguity for object property interiors. `createCtrlEnterExtension(evalFn)` wraps the logic in a CodeMirror `Prec.highest` keymap. Cursor advances to the line after the statement's actual end (using `statementEndLine` from phase 2, not the cursor line). 11 → 26 unit tests covering all edge cases.
 
 **Notable decisions:** The module is isolated precisely so it can be tested without a browser and without any app state. The acorn `e.pos >= code.trimEnd().length` check (rather than `e.message` string matching) is required to correctly classify unclosed parentheses and brackets as `incomplete` rather than `invalid`.
+
+---
+
+## Phase 8A — FileStatus State Machine
+
+**Built:** Replaced the `_isDirty: boolean` flag in `fileManager.js` with an explicit `FileStatus` enum (`UNTITLED | CLEAN | DIRTY | SAVING`). Extracted `src/dialog.js` wrapping Shoelace `sl-dialog` into a reusable `showConfirmDialog({ message, buttons })` helper. Fixed a double-save bug (concurrent `saveFile()` calls now short-circuit when status is `SAVING`), a zombie-file bug on close-last-file (ordering fix in `closeFile()`), and dirty-check-on-close logic to prompt before discarding unsaved changes. New-file UUID reuse eliminated. 30 tests added for `fileManager.js` pure logic.
+
+**Notable decisions:** The `SAVING` guard is the minimal fix for the double-save race without needing locks or queues. Extracting `dialog.js` keeps the confirm-dialog pattern available to any future module without coupling to `fileManager.js` internals.
+
+---
+
+## Phase 8B — Display vs Executable Chunk Distinction
+
+**Built:** Implemented the Quarto convention: `` ```js `` (no braces) is a **display-only** chunk (code shown, never executed), `` ```{js} `` (braces) is an **executable** chunk. Created `src/chunkDetection.js` extracting chunk parsing from `main.js` — exports `ChunkType` (`DISPLAY | EXECUTABLE`), `parseChunkOptions`, `getChunks`, and `getChunkAtLine`. Updated `ctrlEnter.js` `FENCE_OPEN` regex to match only braced chunks. All six run functions now filter to `chunk.type === ChunkType.EXECUTABLE`. Added `displayChunkPlugin` CodeMirror view plugin applying the `.cm-display-chunk` line decoration to every line of display-only blocks. The `insertChunk()` helper inserts `` ```{js} `` (executable) by default.
+
+**Notable decisions:** Extracting `chunkDetection.js` as a pure module (no DOM, no app state) makes it fully unit-testable and allows `ctrlEnter.js`'s lighter fence-scan approach to coexist. The `{js label=foo}` edge case required extending the `isExecutableLang` regex to accept end-of-string in addition to space/comma/brace as a trailing delimiter, because remark truncates `node.lang` at the first space.
+
+---
+
+## Phase 8C — Notebook Preview Pane
+
+**Built:** A fourth tab in the right-pane header — **Preview** — that renders the document as clean HTML. Created `src/preview.js` with two exports:
+
+- `segmentDocument(docText)` — splits a document into alternating `prose` and `chunk` segments using `getChunks()` to locate chunk boundaries and slicing the remaining lines as prose.
+- `renderPreview(docText, chunkOutputs)` — iterates segments: prose rendered via `marked.parse()` and sanitized with `DOMPurify`; display chunks shown as `highlight.js`-highlighted code blocks; executable chunks show their captured output (stored in `chunkOutputs: Map<endLine, innerHTML>`) or a "Not yet run" placeholder. The `echo=true` chunk option shows the source code above the output for executable chunks.
+
+Capture wired into `runCode()` in `main.js`: after a chunk executes, `chunkOutputs.set(endLine, container.innerHTML)` persists the raw HTML before the ✕ close button is injected. `clearOutput()` also clears `chunkOutputs`. `refreshPreview()` calls `renderPreview` and switches the active tab to Preview. Wired as `Actions.refreshPreview`, shortcut `Ctrl+Shift+P`, and a View → Refresh Preview menu item. 22 unit tests added in `tests/preview.test.js` using the jsdom environment. Total test count: 175 passing.
+
+**Notable decisions:** Using `endLine` (the closing fence line, already threaded through `runCode`) as the `chunkOutputs` key avoids introducing a new chunk ID system — the same integer is produced deterministically on every run. `DOMPurify.sanitize()` is applied to both markdown output and captured chunk HTML to close the XSS vector; the `FORCE_BODY` option normalises fragment inputs. `highlight.js` is imported with explicit core + javascript language registration to keep the bundle size small rather than pulling in every supported language.

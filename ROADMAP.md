@@ -6,19 +6,19 @@ A living document. Entries are brief; detail lives in issues or design sessions.
 
 ## Near Term
 
-- **Unit tests** — Vitest suite for `ctrlEnter.js`, `formatForConsole`, `getChunks`/`parseChunkOptions`, and `fileManager.js` pure logic. Currently only `ctrlEnter.js` has tests.
-- **Toggle inline / side-pane output** — the view mode flag exists in `next_steps.md` but the switch is not yet wired to a UI control.
-- **`echo` chunk option** — suppress the code echo in the console for `echo=false` chunks (parsing is already in place via `parseChunkOptions`).
+- **Preview: stable chunk identity** — the current preview uses `endLine` as the `chunkOutputs` key, so inserting lines above a chunk causes its key to shift and the preview shows stale or no output. Replace with a content hash or a stable chunk ID assigned at run time.
+- **Preview: highlight.js CSS theme** — the preview code blocks use `hljs` class names but no style sheet is loaded; syntax highlighting colors are invisible. Load a highlight.js theme matching the dark IDE palette.
+- **`echo` chunk option** — suppress the code echo in the console for `echo=false` chunks (parsing already in place via `parseChunkOptions`; only the console path needs the guard).
 - **`print` chunk option** — route a chunk's console-style output to the inline area rather than the xterm pane.
+- **Toggle inline / side-pane output** — the view mode flag exists in `next_steps.md` but the switch is not yet wired to a UI control.
 
 ---
 
 ## Medium Term
 
 - **DuckDB-WASM** — integrate `@duckdb/duckdb-wasm` as an optional data layer. Add `loadParquet()` and `sql\`...\`` template tag helpers. Needs a Web Worker bridge so SQL doesn't block the main thread.
-- **HTML preview tab** — a fourth tab in the output panel that renders arbitrary HTML strings. Useful for templated reports.
+- **Export / publish** — render the document to standalone HTML: inline all outputs as static content, strip the IDE chrome. Preview pane (`renderPreview`) is already the rendering engine; the export path adds CSS inlining and `<script>`-less output. Quarto-compatible metadata block support (`title:`, `author:`, `format:`).
 - **Multiple windows / splits** — open the same file in a second editor pane (read-only or live-sync).
-- **Export / publish** — render the document to standalone HTML: inline all outputs as static content, strip the IDE chrome. Quarto-compatible metadata block support (`title:`, `author:`, `format:`).
 - **Shareable document URLs** — encode small documents in a URL hash for sharing self-contained analyses.
 
 ---

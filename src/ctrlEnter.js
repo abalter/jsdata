@@ -39,16 +39,18 @@ function isComplete(code) {
 
 // ── Chunk finder (pure, uses only the document text string) ──────────────────
 
-// Matches the opening fence of a JS chunk: ```js  or  ```{js ...}
-const FENCE_OPEN  = /^```\s*\{?\s*js[\s,}]?/
+// Matches the opening fence of an EXECUTABLE JS chunk only: ```{js}, ```{js, ...}, ```{js ...}
+// Display-only blocks (```js without braces) do NOT match — Ctrl+Enter is a no-op inside them.
+const FENCE_OPEN  = /^```\s*\{\s*js[\s,}]/
 const FENCE_CLOSE = /^```\s*$/
 
 /**
- * Find the chunk that contains cursorLine (0-indexed).
+ * Find the executable chunk that contains cursorLine (0-indexed).
  * Returns { startLine, endLine } (both 0-indexed, pointing at the fence lines)
- * or null if the cursor is not inside a chunk.
+ * or null if the cursor is not inside an executable chunk.
+ * Display chunks (```js without braces) always return null.
  */
-function findChunkAtLine(docText, cursorLine) {
+export function findChunkAtLine(docText, cursorLine) {
   const lines = docText.split('\n')
   let openLine = null
 

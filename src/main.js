@@ -7,10 +7,6 @@ import { javascript } from '@codemirror/lang-javascript'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { undo as cmUndo, redo as cmRedo } from '@codemirror/commands'
 
-// ── Remark (markdown AST) ────────────────────────────────────────────────────
-import { unified } from 'unified'
-import remarkParse from 'remark-parse'
-
 // ── xterm.js ─────────────────────────────────────────────────────────────────
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -20,6 +16,8 @@ import { createDataIOHelpers } from './dataIO.js'
 import * as Actions from './actions.js'
 import { registerShortcuts } from './shortcuts.js'
 import { createCtrlEnterExtension } from './ctrlEnter.js'
+import { getChunks, getChunkAtLine, ChunkType } from './chunkDetection.js'
+import { renderPreview } from './preview.js'
 
 // ── Shoelace web components ───────────────────────────────────────────────────
 import '@shoelace-style/shoelace/dist/components/dropdown/dropdown.js'
@@ -37,6 +35,9 @@ const editorMount   = document.getElementById('editor-content')
 // ── Inline output state ──────────────────────────────────────────────────────
 const inlineOutputs = new Map()           // doc position → DOM container
 const pendingInlineOutputs = []           // { endLine, dom } awaiting flush
+
+// ── Preview output state ─────────────────────────────────────────────────────
+const chunkOutputs = new Map()            // endLine (1-based) → innerHTML
 const setInlineOutput = StateEffect.define()
 const clearInlineOutputs = StateEffect.define()
 
@@ -47,6 +48,7 @@ let captureTarget = null  // null = output pane, DOM element = capture into it
 
 function clearOutput() {
   outputContent.innerHTML = ''
+  chunkOutputs.clear()
   if (inlineOutputs.size > 0 && typeof editorView !== 'undefined') {
     inlineOutputs.clear()
     editorView.dispatch({ effects: clearInlineOutputs.of(null) })
@@ -383,55 +385,6 @@ function escapeHtml(s) {
 
 window.clearSession = clearSession
 
-// ── Chunk detection via remark ───────────────────────────────────────────────
-
-function parseChunkOptions(lang, meta) {
-  // Combine lang + meta back into the full info string, then strip `{` `}` and language
-  const raw = ((lang || '') + (meta ? ' ' + meta : '')).trim()
-  // Match both ```js and ```{js, ...}
-  const inner = raw.replace(/^\{?\s*js\s*,?\s*/, '').replace(/\}$/, '').trim()
-  if (!inner) return {}
-  const opts = {}
-  // Parse key=value pairs (values can be bare words, quoted strings, or boolean)
-  for (const part of inner.split(/,\s*/)) {
-    const m = part.match(/^\s*(\w+)\s*=\s*(.+?)\s*$/)
-    if (m) {
-      const [, key, val] = m
-      // Coerce booleans and numbers
-      if (val === 'true') opts[key] = true
-      else if (val === 'false') opts[key] = false
-      else if (/^-?\d+(\.\d+)?$/.test(val)) opts[key] = Number(val)
-      else opts[key] = val.replace(/^["']|["']$/g, '')  // strip quotes
-    } else {
-      // Bare word — treat as label
-      const trimmed = part.trim()
-      if (trimmed) opts.label = trimmed
-    }
-  }
-  return opts
-}
-
-function isJsChunk(node) {
-  const lang = (node.lang || '').trim()
-  return /^\{?\s*js[\s,}]?/.test(lang) || lang === 'js'
-}
-
-function getChunks(docText) {
-  const tree = unified().use(remarkParse).parse(docText)
-  return tree.children
-    .filter(node => node.type === 'code' && isJsChunk(node))
-    .map(node => ({
-      code: node.value,
-      startLine: node.position.start.line,   // 1-based
-      endLine: node.position.end.line,
-      options: parseChunkOptions(node.lang, node.meta),
-    }))
-}
-
-function getChunkAtLine(docText, line) {
-  return getChunks(docText).find(c => line >= c.startLine && line <= c.endLine)
-}
-
 // ── Run functions ────────────────────────────────────────────────────────────
 
 function runCode(code, echo = false, endLine = null) {
@@ -462,6 +415,9 @@ function runCode(code, echo = false, endLine = null) {
   captureTarget = null
 
   if (container && container.children.length > 0) {
+    // Capture output for preview pane (before close button is prepended)
+    chunkOutputs.set(endLine, container.innerHTML)
+
     // Add close button to clear this inline output
     const closeBtn = document.createElement('button')
     closeBtn.className = 'chunk-output-close'
@@ -496,7 +452,8 @@ function runChunkAtCursor() {
   const docText = editorView.state.doc.toString()
   const cursorLine = editorView.state.doc.lineAt(editorView.state.selection.main.head).number
   const chunk = getChunkAtLine(docText, cursorLine)
-  if (chunk && chunk.options.eval !== false) runCode(chunk.code, true, chunk.endLine)
+  if (chunk && chunk.type === ChunkType.EXECUTABLE && chunk.options.eval !== false)
+    runCode(chunk.code, true, chunk.endLine)
   flushInlineOutputs()
 }
 
@@ -504,8 +461,8 @@ function runNextChunk() {
   const doc = editorView.state.doc
   const docText = doc.toString()
   const cursorLine = doc.lineAt(editorView.state.selection.main.head).number
-  const chunks = getChunks(docText)
-  // Find the first chunk that starts after the current cursor line
+  // Only consider executable chunks for navigation and execution
+  const chunks = getChunks(docText).filter(c => c.type === ChunkType.EXECUTABLE)
   const currentChunk = chunks.find(c => cursorLine >= c.startLine && cursorLine <= c.endLine)
   let nextChunk
   if (currentChunk) {
@@ -514,7 +471,6 @@ function runNextChunk() {
     nextChunk = chunks.find(c => c.startLine > cursorLine)
   }
   if (!nextChunk) return
-  // Move cursor into the next chunk
   const targetLine = doc.line(Math.min(nextChunk.startLine + 1, doc.lines))
   editorView.dispatch({ selection: { anchor: targetLine.from }, scrollIntoView: true })
   if (nextChunk.options.eval !== false) runCode(nextChunk.code, true, nextChunk.endLine)
@@ -525,7 +481,8 @@ function runAll() {
   clearOutput()
   const docText = editorView.state.doc.toString()
   for (const chunk of getChunks(docText)) {
-    if (chunk.options.eval !== false) runCode(chunk.code, false, chunk.endLine)
+    if (chunk.type === ChunkType.EXECUTABLE && chunk.options.eval !== false)
+      runCode(chunk.code, false, chunk.endLine)
   }
   flushInlineOutputs()
 }
@@ -533,7 +490,8 @@ function runAll() {
 function runChunkByLine(startLine) {
   const docText = editorView.state.doc.toString()
   const chunk = getChunkAtLine(docText, startLine)
-  if (chunk && chunk.options.eval !== false) runCode(chunk.code, true, chunk.endLine)
+  if (chunk && chunk.type === ChunkType.EXECUTABLE && chunk.options.eval !== false)
+    runCode(chunk.code, true, chunk.endLine)
   flushInlineOutputs()
 }
 
@@ -541,7 +499,8 @@ function runAllAbove(startLine) {
   const docText = editorView.state.doc.toString()
   for (const chunk of getChunks(docText)) {
     if (chunk.startLine >= startLine) break
-    if (chunk.options.eval !== false) runCode(chunk.code, false, chunk.endLine)
+    if (chunk.type === ChunkType.EXECUTABLE && chunk.options.eval !== false)
+      runCode(chunk.code, false, chunk.endLine)
   }
   flushInlineOutputs()
 }
@@ -549,7 +508,10 @@ function runAllAbove(startLine) {
 function runAllBelow(startLine) {
   const docText = editorView.state.doc.toString()
   for (const chunk of getChunks(docText)) {
-    if (chunk.startLine >= startLine && chunk.options.eval !== false) runCode(chunk.code, false, chunk.endLine)
+    if (chunk.startLine >= startLine &&
+        chunk.type === ChunkType.EXECUTABLE &&
+        chunk.options.eval !== false)
+      runCode(chunk.code, false, chunk.endLine)
   }
   flushInlineOutputs()
 }
@@ -604,11 +566,12 @@ class ChunkButtonsWidget extends WidgetType {
   ignoreEvent() { return true }
 }
 
-function buildChunkDecorations(view) {
+// Executable chunk: run-button widget on the opening fence line.
+function buildChunkButtonDecorations(view) {
   const docText = view.state.doc.toString()
-  const chunks = getChunks(docText)
   const widgets = []
-  for (const chunk of chunks) {
+  for (const chunk of getChunks(docText)) {
+    if (chunk.type !== ChunkType.EXECUTABLE) continue
     const line = view.state.doc.line(chunk.startLine)
     widgets.push(Decoration.widget({
       widget: new ChunkButtonsWidget(chunk.startLine),
@@ -619,10 +582,35 @@ function buildChunkDecorations(view) {
 }
 
 const chunkDecorationsPlugin = ViewPlugin.fromClass(class {
-  constructor(view) { this.decorations = buildChunkDecorations(view) }
+  constructor(view) { this.decorations = buildChunkButtonDecorations(view) }
   update(update) {
     if (update.docChanged || update.viewportChanged) {
-      this.decorations = buildChunkDecorations(update.view)
+      this.decorations = buildChunkButtonDecorations(update.view)
+    }
+  }
+}, { decorations: v => v.decorations })
+
+// Display chunk: line-level class applied to every line of the fenced block.
+function buildDisplayChunkDecorations(view) {
+  const docText = view.state.doc.toString()
+  const decos = []
+  for (const chunk of getChunks(docText)) {
+    if (chunk.type !== ChunkType.DISPLAY) continue
+    for (let ln = chunk.startLine; ln <= chunk.endLine; ln++) {
+      try {
+        const line = view.state.doc.line(ln)
+        decos.push(Decoration.line({ class: 'cm-display-chunk' }).range(line.from))
+      } catch { /* line out of range — skip */ }
+    }
+  }
+  return Decoration.set(decos)
+}
+
+const displayChunkPlugin = ViewPlugin.fromClass(class {
+  constructor(view) { this.decorations = buildDisplayChunkDecorations(view) }
+  update(update) {
+    if (update.docChanged || update.viewportChanged) {
+      this.decorations = buildDisplayChunkDecorations(update.view)
     }
   }
 }, { decorations: v => v.decorations })
@@ -1054,7 +1042,7 @@ const DEMO_DOC = `# Sales Analysis
 
 Explore regional sales data using Arquero and Observable Plot.
 
-\`\`\`js
+\`\`\`{js}
 var data = aq.from([
   { category: "A", value: 10, region: "North" },
   { category: "B", value: 25, region: "South" },
@@ -1068,7 +1056,7 @@ display(data)
 
 ## Summary by Region
 
-\`\`\`js
+\`\`\`{js}
 var summary = data
   .groupby("region")
   .rollup({ total: aq.op.sum("value") })
@@ -1079,7 +1067,7 @@ display(summary)
 
 ## Visualization
 
-\`\`\`js
+\`\`\`{js}
 var chart = Plot.plot({
   marginLeft: 50,
   style: { background: "transparent", color: "#cdd6f4", fontSize: "12px" },
@@ -1103,10 +1091,10 @@ displayText("This only runs when you manually execute it!")
 
 function insertChunk() {
   const pos = editorView.state.selection.main.head
-  const template = '\n```js\n\n```\n'
+  const template = '\n```{js}\n\n```\n'
   editorView.dispatch({
     changes: { from: pos, insert: template },
-    selection: { anchor: pos + 5 },  // cursor inside the empty chunk
+    selection: { anchor: pos + 9 },  // cursor on the blank line inside the chunk
   })
   editorView.focus()
 }
@@ -1115,15 +1103,26 @@ window.insertChunk = insertChunk
 
 function insertLoadCSVChunk() {
   const pos = editorView.state.selection.main.head
-  const template = '\n```js\nvar data = await loadCSV()\ndisplay(data)\n```\n'
+  const template = '\n```{js}\nvar data = await loadCSV()\ndisplay(data)\n```\n'
   editorView.dispatch({
     changes: { from: pos, insert: template },
-    selection: { anchor: pos + 16 },  // cursor on the variable name
+    selection: { anchor: pos + 18 },  // cursor on the variable name
   })
   editorView.focus()
 }
 
 window.insertLoadCSVChunk = insertLoadCSVChunk
+
+// ── Preview ──────────────────────────────────────────────────────────────────
+
+function refreshPreview() {
+  const container = document.getElementById('preview-content')
+  if (!container) return
+  const docText = editorView.state.doc.toString()
+  container.innerHTML = renderPreview(docText, chunkOutputs)
+  const previewBtn = document.querySelector('[data-tab="preview-content"]')
+  if (previewBtn) switchTab(previewBtn)
+}
 
 // ── View toggle helpers ───────────────────────────────────────────────────────
 
@@ -1202,14 +1201,6 @@ const jsAnalystKeymap = Prec.highest(keymap.of([
     key: 'Ctrl-Shift-n',
     run() { runNextChunk(); return true },
   },
-  {
-    key: 'Ctrl-Alt-i',
-    run() { insertChunk(); return true },
-  },
-  {
-    key: 'Ctrl-s',
-    run() { FM.saveFile().catch(e => displayError(e)); return true },
-  },
 ]))
 
 // Ctrl+Enter is handled by the isolated ctrlEnterExtension (created below,
@@ -1231,6 +1222,7 @@ const editorView = new EditorView({
       ctrlEnterExtension,
       jsAnalystKeymap,
       chunkDecorationsPlugin,
+      displayChunkPlugin,
       inlineOutputField,
       EditorView.theme({
         '&': { height: '100%', fontSize: '12.5px' },
@@ -1267,6 +1259,7 @@ Actions.initActions({
   insertChunk,
   toggleConsole,
   toggleOutputPane,
+  refreshPreview,
   displayError,
   undo: () => cmUndo(editorView),
   redo: () => cmRedo(editorView),

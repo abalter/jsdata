@@ -9,7 +9,11 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { getStatementAtCursor, getStatementInfoAtCursor } from '../src/ctrlEnter.js'
+import {
+  getStatementAtCursor,
+  getStatementInfoAtCursor,
+  findChunkAtLine,
+} from '../src/ctrlEnter.js'
 
 // ── Shared document fixture ───────────────────────────────────────────────────
 //
@@ -250,5 +254,52 @@ describe('getStatementInfoAtCursor — endLine for cursor advancement', () => {
 
   it('returns null when cursor is outside the chunk', () => {
     expect(getStatementInfoAtCursor(PLOT_DOC, 0, 2, 12)).toBeNull()
+  })
+})
+
+// ── findChunkAtLine — display vs. executable ──────────────────────────────────
+//
+// findChunkAtLine only locates EXECUTABLE (braced) chunks.
+// Cursor inside a display chunk (```js without braces) returns null.
+
+const MIXED_DOC = `# Mixed
+
+\`\`\`js
+var display = 1
+\`\`\`
+
+\`\`\`{js}
+var exec = 2
+\`\`\``
+// display chunk: 0-indexed lines 2-4
+// executable chunk: 0-indexed lines 6-8
+
+describe('findChunkAtLine — display vs executable', () => {
+  it('returns null for a cursor inside a display chunk (```js)', () => {
+    expect(findChunkAtLine(MIXED_DOC, 3)).toBeNull()
+  })
+
+  it('returns bounds for a cursor inside an executable chunk (```{js})', () => {
+    const chunk = findChunkAtLine(MIXED_DOC, 7)
+    expect(chunk).not.toBeNull()
+    expect(chunk.startLine).toBe(6)
+    expect(chunk.endLine).toBe(8)
+  })
+
+  it('returns null for a cursor on the prose between chunks', () => {
+    expect(findChunkAtLine(MIXED_DOC, 5)).toBeNull()
+  })
+
+  it('returns null when the cursor is outside any chunk', () => {
+    expect(findChunkAtLine(MIXED_DOC, 0)).toBeNull()
+  })
+
+  it('returns null when cursor is on the opening fence of a display chunk', () => {
+    expect(findChunkAtLine(MIXED_DOC, 2)).toBeNull()
+  })
+
+  it('returns null when cursor is on the opening fence of an executable chunk', () => {
+    // cursor on the fence line itself — not strictly inside
+    expect(findChunkAtLine(MIXED_DOC, 6)).toBeNull()
   })
 })

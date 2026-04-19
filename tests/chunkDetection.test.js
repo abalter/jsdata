@@ -1,72 +1,20 @@
 /**
  * tests/chunkDetection.test.js
  *
- * Tests for the remark-based chunk detection logic.
+ * Tests for the remark-based chunk detection logic in src/chunkDetection.js.
  *
- * NOTE: `getChunks` and `parseChunkOptions` are currently embedded in src/main.js
- * and are not exported. These tests reimplement the same logic using the same
- * remark/unified dependencies so they test the behaviour (and catch dependency
- * API regressions) without requiring a DOM or import of main.js.
- *
- * Once these functions are extracted to src/chunkDetection.js, replace the local
- * definitions below with:
- *
- *   import { getChunks, parseChunkOptions } from '../src/chunkDetection.js'
- *
- * and delete the local copies.
+ * Convention (matches Quarto):
+ *   ```js     → display only (type: 'display'). Never executed.
+ *   ```{js}   → executable chunk (type: 'executable').
  */
 
 import { describe, it, expect } from 'vitest'
-import { unified } from 'unified'
-import remarkParse from 'remark-parse'
-
-// ── Local copies of the functions under test ──────────────────────────────────
-// Copied verbatim from src/main.js.  Any divergence between this copy and the
-// main.js originals means these tests no longer catch regressions in the app.
-
-function parseChunkOptions(lang, meta) {
-  const raw = ((lang || '') + (meta ? ' ' + meta : '')).trim()
-  const inner = raw.replace(/^\{?\s*js\s*,?\s*/, '').replace(/\}$/, '').trim()
-  if (!inner) return {}
-  const opts = {}
-  for (const part of inner.split(/,\s*/)) {
-    const m = part.match(/^\s*(\w+)\s*=\s*(.+?)\s*$/)
-    if (m) {
-      const [, key, val] = m
-      if (val === 'true') opts[key] = true
-      else if (val === 'false') opts[key] = false
-      else if (/^-?\d+(\.\d+)?$/.test(val)) opts[key] = Number(val)
-      else opts[key] = val.replace(/^["']|["']$/g, '')
-    } else {
-      const trimmed = part.trim()
-      if (trimmed) opts.label = trimmed
-    }
-  }
-  return opts
-}
-
-function isJsChunk(node) {
-  const lang = (node.lang || '').trim()
-  return /^\{?\s*js[\s,}]?/.test(lang) || lang === 'js'
-}
-
-function getChunks(docText) {
-  const tree = unified().use(remarkParse).parse(docText)
-  return tree.children
-    .filter(node => node.type === 'code' && isJsChunk(node))
-    .map(node => ({
-      code: node.value,
-      startLine: node.position.start.line,   // 1-based
-      endLine: node.position.end.line,
-      options: parseChunkOptions(node.lang, node.meta),
-    }))
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function parse(docText) {
-  return unified().use(remarkParse).parse(docText)
-}
+import {
+  getChunks,
+  getChunkAtLine,
+  parseChunkOptions,
+  ChunkType,
+} from '../src/chunkDetection.js'
 
 // ── Single chunk ──────────────────────────────────────────────────────────────
 
@@ -262,5 +210,148 @@ describe('fenced blocks inside markdown constructs are not detected', () => {
     // Indented code blocks in Markdown are not fenced blocks
     const doc = '    var x = 1\n    var y = 2'
     expect(getChunks(doc)).toHaveLength(0)
+  })
+})
+
+// ── display vs. executable type ───────────────────────────────────────────────
+
+describe('chunk type: display vs. executable', () => {
+  it('```js  (no braces) is type display', () => {
+    const doc = '```js\nvar x = 1\n```'
+    expect(getChunks(doc)[0].type).toBe(ChunkType.DISPLAY)
+  })
+
+  it('```{js}  (braces) is type executable', () => {
+    const doc = '```{js}\nvar x = 1\n```'
+    expect(getChunks(doc)[0].type).toBe(ChunkType.EXECUTABLE)
+  })
+
+  it('```{js, eval=false}  is type executable', () => {
+    const doc = '```{js, eval=false}\nvar x = 1\n```'
+    expect(getChunks(doc)[0].type).toBe(ChunkType.EXECUTABLE)
+  })
+
+  it('```{js, eval=false}  has options parsed', () => {
+    const doc = '```{js, eval=false}\nvar x = 1\n```'
+    expect(getChunks(doc)[0].options.eval).toBe(false)
+  })
+
+  it('display chunk has empty options', () => {
+    const doc = '```js\nvar x = 1\n```'
+    expect(getChunks(doc)[0].options).toEqual({})
+  })
+
+  it('```{js label=my-chunk}  is executable with label option', () => {
+    const doc = '```{js label=my-chunk}\nvar x = 1\n```'
+    const chunk = getChunks(doc)[0]
+    expect(chunk.type).toBe(ChunkType.EXECUTABLE)
+    expect(chunk.options.label).toBe('my-chunk')
+  })
+
+  it('all chunks have lang: "js"', () => {
+    const doc = '```js\nvar a = 1\n```\n\n```{js}\nvar b = 2\n```'
+    for (const chunk of getChunks(doc)) {
+      expect(chunk.lang).toBe('js')
+    }
+  })
+})
+
+// ── mixed document ────────────────────────────────────────────────────────────
+
+describe('mixed document — display and executable chunks', () => {
+  const doc = `# Analysis
+
+This is a display example:
+
+\`\`\`js
+var note = "this is display only"
+\`\`\`
+
+This runs:
+
+\`\`\`{js}
+var result = 42
+\`\`\`
+
+Another display:
+
+\`\`\`js
+// reference code, not run
+\`\`\`
+
+Another executable:
+
+\`\`\`{js, eval=false}
+var skipped = true
+\`\`\``
+
+  it('detects 4 chunks total', () => {
+    expect(getChunks(doc)).toHaveLength(4)
+  })
+
+  it('first chunk is display', () => {
+    expect(getChunks(doc)[0].type).toBe(ChunkType.DISPLAY)
+  })
+
+  it('second chunk is executable', () => {
+    expect(getChunks(doc)[1].type).toBe(ChunkType.EXECUTABLE)
+  })
+
+  it('third chunk is display', () => {
+    expect(getChunks(doc)[2].type).toBe(ChunkType.DISPLAY)
+  })
+
+  it('fourth chunk is executable', () => {
+    expect(getChunks(doc)[3].type).toBe(ChunkType.EXECUTABLE)
+  })
+
+  it('executable chunks with eval=false are still type executable', () => {
+    const exec = getChunks(doc).filter(c => c.type === ChunkType.EXECUTABLE)
+    expect(exec).toHaveLength(2)
+    expect(exec[1].options.eval).toBe(false)
+  })
+
+  it('Run All skips display chunks and eval=false chunks', () => {
+    // Simulate the runAll filter used in main.js
+    const runnable = getChunks(doc).filter(
+      c => c.type === ChunkType.EXECUTABLE && c.options.eval !== false
+    )
+    expect(runnable).toHaveLength(1)
+    expect(runnable[0].code).toBe('var result = 42')
+  })
+})
+
+// ── getChunkAtLine ────────────────────────────────────────────────────────────
+
+describe('getChunkAtLine', () => {
+  const doc = `# Title
+
+\`\`\`js
+var x = 1
+\`\`\`
+
+\`\`\`{js}
+var y = 2
+\`\`\``
+  // display chunk: lines 3-5, executable chunk: lines 7-9
+
+  it('returns the chunk containing the given line', () => {
+    const chunk = getChunkAtLine(doc, 4)
+    expect(chunk).not.toBeNull()
+    expect(chunk.code).toBe('var x = 1')
+  })
+
+  it('returns null for a line between chunks', () => {
+    expect(getChunkAtLine(doc, 6)).toBeNull()
+  })
+
+  it('getChunkAtLine on a display chunk returns type display', () => {
+    const chunk = getChunkAtLine(doc, 4)
+    expect(chunk?.type).toBe(ChunkType.DISPLAY)
+  })
+
+  it('getChunkAtLine on an executable chunk returns type executable', () => {
+    const chunk = getChunkAtLine(doc, 8)
+    expect(chunk?.type).toBe(ChunkType.EXECUTABLE)
   })
 })

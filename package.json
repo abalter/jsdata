@@ -29,10 +29,16 @@
     "@xterm/xterm": "^6.0.0",
     "acorn": "^8.16.0",
     "codemirror": "^6.0.2",
+    "dompurify": "^3.4.0",
+    "highlight.js": "^11.11.1",
+    "marked": "^18.0.2",
     "remark-parse": "^11.0.0",
     "tinykeys": "^3.0.0",
     "unified": "^11.0.5",
     "vite": "^8.0.8",
     "vitest": "^4.1.4"
+  },
+  "devDependencies": {
+    "jsdom": "^29.0.2"
   }
 }

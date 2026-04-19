@@ -70,6 +70,7 @@ export const toggleRunOnOpen = async () => {
 
 export const toggleConsole    = () => _d.toggleConsole?.()
 export const toggleOutputPane = () => _d.toggleOutputPane?.()
+export const refreshPreview   = () => _d.refreshPreview?.()
 
 // ── Help ─────────────────────────────────────────────────────────────────────
 
