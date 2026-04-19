@@ -5,6 +5,8 @@
  *
  * Testing strategy:
  *  - src/db.js (IndexedDB) is mocked via vi.mock so no real IDB calls are made.
+ *  - src/dialog.js is mocked so confirmation dialogs resolve immediately without
+ *    a real DOM (default: "Don't Save" — proceed without saving).
  *  - src/fileManager.js is dynamically imported AFTER globals are stubbed, so
  *    the module-level `typeof window.showOpenFilePicker` check does not throw.
  *  - vi.resetModules() in beforeEach gives each test a clean module instance
@@ -13,10 +15,10 @@
  *    toggleRunOnOpen(), switchToId(), closeFile(), onEditorChange() side effects.
  *
  * NOTE on design signal: The private helpers blankFile(), generateId(),
- * setDirty(), updateTitle() etc. are not exported.  If those need independent
- * tests, they should be extracted to a separate utility module.  For now we
- * observe their effects through the exported API and through the document.title
- * side effect (which this file mocks as a plain object property).
+ * setFileStatus(), updateTitle() etc. are not exported.  If those need
+ * independent tests, they should be extracted to a separate utility module.
+ * For now we observe their effects through the exported API and through the
+ * document.title side effect.
  *
  * Tests for saveFile() / saveFileAs() / openFile() are marked it.todo because
  * they require mocking the File System Access API (window.showSaveFilePicker,
@@ -34,8 +36,17 @@ vi.mock('../src/db.js', () => ({
   saveWorkspace: vi.fn().mockResolvedValue(undefined),
 }))
 
+// ── Mock dialog.js ────────────────────────────────────────────────────────────
+// showConfirmDialog requires a live DOM with Shoelace registered, which is not
+// available in the Node test environment.  Default to "Don't Save" so tests
+// that trigger the unsaved-changes guard proceed without blocking.
+
+vi.mock('../src/dialog.js', () => ({
+  showConfirmDialog: vi.fn().mockResolvedValue("Don't Save"),
+}))
+
 // ── Browser-like globals so fileManager.js runs in Node ──────────────────────
-// fileManager.js has module-level: `const hasNativeFS = typeof window.showOpenFilePicker === 'function'`
+// fileManager.js has module-level: `const hasNativeFSOpen = typeof window.showOpenFilePicker === 'function'`
 // Without these stubs it throws ReferenceError in Node.
 
 vi.stubGlobal('window', {
@@ -101,6 +112,12 @@ describe('init() — no saved workspace', () => {
     await FM.init(mockEditorView(), null, mockOps())
     expect(FM.getCurrentFile()?.runOnOpen).toBe(false)
   })
+
+  it('demo doc is given CLEAN status (treated as already saved to IDB)', async () => {
+    db.loadWorkspace.mockResolvedValueOnce(null)
+    await FM.init(mockEditorView(), null, mockOps())
+    expect(FM.getCurrentFile()?.status).toBe(FM.FileStatus.CLEAN)
+  })
 })
 
 // ── init() with saved workspace ───────────────────────────────────────────────
@@ -134,6 +151,13 @@ describe('init() — from saved workspace', () => {
     db.loadWorkspace.mockResolvedValueOnce({ version: 1, activeFileId: 'x', files: [oldFile] })
     await FM.init(mockEditorView(), null, mockOps())
     expect(FM.getCurrentFile()?.runOnOpen).toBe(false)
+  })
+
+  it('migrates old files missing status: null fileHandle → UNTITLED', async () => {
+    const oldFile = { id: 'x', name: 'old.md', content: '', lastModified: 0, fileHandle: null }
+    db.loadWorkspace.mockResolvedValueOnce({ version: 1, activeFileId: 'x', files: [oldFile] })
+    await FM.init(mockEditorView(), null, mockOps())
+    expect(FM.getCurrentFile()?.status).toBe(FM.FileStatus.UNTITLED)
   })
 
   it('calls runAll when runOnOpen is true', async () => {
@@ -204,6 +228,21 @@ describe('newFile()', () => {
     expect(typeof f?.id).toBe('string')
     expect(f?.id.length).toBeGreaterThan(0)
   })
+
+  it('new file has status UNTITLED', async () => {
+    await FM.init(mockEditorView(), null, mockOps())
+    await FM.newFile()
+    expect(FM.getCurrentFile()?.status).toBe(FM.FileStatus.UNTITLED)
+  })
+
+  it('new file always gets a distinct UUID (never reuses existing untitled)', async () => {
+    await FM.init(mockEditorView(), null, mockOps())
+    await FM.newFile()
+    const id1 = FM.getCurrentFile()?.id
+    await FM.newFile()
+    const id2 = FM.getCurrentFile()?.id
+    expect(id1).not.toBe(id2)
+  })
 })
 
 // ── switchToId() ──────────────────────────────────────────────────────────────
@@ -268,22 +307,21 @@ describe('closeFile()', () => {
     // The active file is a new blank — not the original
     expect(FM.getCurrentFile()?.id).not.toBe('f1')
     expect(FM.getCurrentFile()?.name).toBe('untitled.md')
-    // NOTE: Known behaviour — persistToIDB inside switchTo() re-appends the old
-    // _currentFile (f1) because _currentFile is updated *after* the persist call.
-    // As a result getAllFiles() currently contains 2 entries (blank + f1 zombie).
-    // When this is fixed, add: expect(FM.getAllFiles()).toHaveLength(1)
+    // Zombie bug is fixed: _currentFile is nulled before switchTo so persistToIDB
+    // inside switchTo skips the old file, leaving exactly one entry in allFiles.
+    expect(FM.getAllFiles()).toHaveLength(1)
   })
 })
 
 // ── onEditorChange() — dirty flag observable via document.title ───────────────
 
 describe('onEditorChange()', () => {
-  it('marks the document title as dirty (contains *)', async () => {
+  it('marks the document title as dirty (contains bullet •)', async () => {
     await FM.init(mockEditorView(), null, mockOps())
     // Reset title to known state
     globalThis.document.title = ''
     FM.onEditorChange()
-    expect(globalThis.document.title).toContain('*')
+    expect(globalThis.document.title).toContain('\u2022')  // bullet character •
   })
 })
 

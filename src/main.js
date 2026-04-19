@@ -1156,7 +1156,9 @@ function renderFileTabs() {
   bar.innerHTML = ''
   for (const f of files) {
     const tab = document.createElement('button')
-    tab.className = 'file-tab' + (f.id === current?.id ? ' active' : '')
+    tab.className = 'file-tab' +
+      (f.id === current?.id ? ' active' : '') +
+      (f.status === 'dirty' ? ' dirty' : '')
     tab.dataset.id = f.id
 
     const name = document.createElement('span')
