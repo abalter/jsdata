@@ -5,6 +5,7 @@ import { basicSetup } from 'codemirror'
 import { markdown } from '@codemirror/lang-markdown'
 import { javascript } from '@codemirror/lang-javascript'
 import { oneDark } from '@codemirror/theme-one-dark'
+import { undo as cmUndo, redo as cmRedo } from '@codemirror/commands'
 
 // ── Remark (markdown AST) ────────────────────────────────────────────────────
 import { unified } from 'unified'
@@ -14,6 +15,20 @@ import remarkParse from 'remark-parse'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
+import * as FM from './fileManager.js'
+import { createDataIOHelpers } from './dataIO.js'
+import * as Actions from './actions.js'
+import { registerShortcuts } from './shortcuts.js'
+import { createCtrlEnterExtension } from './ctrlEnter.js'
+
+// ── Shoelace web components ───────────────────────────────────────────────────
+import '@shoelace-style/shoelace/dist/components/dropdown/dropdown.js'
+import '@shoelace-style/shoelace/dist/components/menu/menu.js'
+import '@shoelace-style/shoelace/dist/components/menu-item/menu-item.js'
+import '@shoelace-style/shoelace/dist/components/divider/divider.js'
+import '@shoelace-style/shoelace/dist/components/dialog/dialog.js'
+import { setBasePath } from '@shoelace-style/shoelace/dist/utilities/base-path.js'
+setBasePath('https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2/dist/')
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
 const outputContent = document.getElementById('output-content')
@@ -112,6 +127,7 @@ function clearSession() {
   for (const key of SESSION_VARS) delete window[key]
   SESSION_VARS.length = 0
   updateExplorer()
+  term.writeln('\x1b[90mSession cleared.\x1b[0m')
 }
 
 function evalInSession(code) {
@@ -436,7 +452,10 @@ function runCode(code, echo = false, endLine = null) {
   }
 
   // Auto-display last expression value if no explicit output was produced
-  if (container && container.children.length === 0 && err === null && result !== undefined) {
+  // Skip assignments — the value is stored in the variable; showing it implicitly
+  // would be noisy and could be huge (e.g. a 10 000-element array).
+  if (container && container.children.length === 0 && err === null &&
+      result !== undefined && !isAssignment(code)) {
     display(result)
   }
 
@@ -502,88 +521,6 @@ function runNextChunk() {
   flushInlineOutputs()
 }
 
-function runCurrentLine() {
-  const doc = editorView.state.doc
-  const docText = doc.toString()
-  const cursorLine = doc.lineAt(editorView.state.selection.main.head).number
-  const chunk = getChunkAtLine(docText, cursorLine)
-  if (!chunk) return
-
-  // Lines of code inside the chunk (1-based; chunk fence lines excluded)
-  const codeStartLine = chunk.startLine + 1
-  const codeLines = chunk.code.split('\n')
-
-  // Cursor position relative to the code lines (0-based index)
-  const cursorIdx = cursorLine - codeStartLine
-  if (cursorIdx < 0 || cursorIdx >= codeLines.length) return
-
-  // Distinguish incomplete JS (needs more input) from invalid JS (real error).
-  // "Unexpected end of input" / "Unexpected token }" at EOI = incomplete.
-  function parseStatus(code) {
-    try {
-      new Function(code)
-      return 'complete'
-    } catch (e) {
-      const msg = e.message.toLowerCase()
-      // Incomplete indicators across engines:
-      // V8/Chrome: "unexpected end of input"
-      // SpiderMonkey/Firefox: "expected expression, got end of script"
-      //                       "expected '}'" / "expected ']'" / "expected ')'"
-      //                       "unterminated string literal"
-      // All engines: "unterminated" anything
-      if (
-        /unexpected end of input/.test(msg) ||
-        /got end of script/.test(msg) ||
-        /expected ['"][}\])]/.test(msg) ||
-        /unterminated/.test(msg) ||
-        /expected.*got end/.test(msg)
-      ) {
-        return 'incomplete'
-      }
-      // Heuristic: trailing chars that imply continuation
-      const trimmed = code.trimEnd()
-      if (/[{(\[,+\-=>&|?:]$/.test(trimmed) || /=>$/.test(trimmed)) {
-        return 'incomplete'
-      }
-      return 'invalid'
-    }
-  }
-
-  // Expand upward from cursor to find statement start
-  let startIdx = cursorIdx
-  while (startIdx > 0) {
-    const candidate = codeLines.slice(startIdx, cursorIdx + 1).join('\n')
-    const status = parseStatus(candidate)
-    if (status !== 'invalid') break  // complete or incomplete — good start
-    startIdx--
-  }
-
-  // Expand downward only if the code is incomplete (not invalid)
-  let endIdx = cursorIdx
-  while (endIdx < codeLines.length - 1) {
-    const candidate = codeLines.slice(startIdx, endIdx + 1).join('\n')
-    const status = parseStatus(candidate)
-    if (status === 'complete') break
-    if (status === 'invalid') break  // real error — don't keep expanding
-    endIdx++
-  }
-
-  const statement = codeLines.slice(startIdx, endIdx + 1).join('\n')
-  runCode(statement, true, chunk.endLine)
-  flushInlineOutputs()
-
-  // Move cursor to the next line after the executed statement (within chunk)
-  const nextLineNum = codeStartLine + endIdx + 1
-  const chunkCodeEndLine = chunk.endLine - 1  // last code line (before closing fence)
-  if (nextLineNum <= chunkCodeEndLine) {
-    const nextLine = doc.line(nextLineNum)
-    editorView.dispatch({
-      selection: { anchor: nextLine.from },
-      scrollIntoView: true,
-    })
-  }
-}
-
 function runAll() {
   clearOutput()
   const docText = editorView.state.doc.toString()
@@ -615,6 +552,16 @@ function runAllBelow(startLine) {
     if (chunk.startLine >= startLine && chunk.options.eval !== false) runCode(chunk.code, false, chunk.endLine)
   }
   flushInlineOutputs()
+}
+
+function runAllAboveCursor() {
+  const line = editorView.state.doc.lineAt(editorView.state.selection.main.head).number
+  runAllAbove(line)
+}
+
+function runAllBelowCursor() {
+  const line = editorView.state.doc.lineAt(editorView.state.selection.main.head).number
+  runAllBelow(line)
 }
 
 window.runAll = runAll
@@ -739,6 +686,152 @@ const inlineOutputField = StateField.define({
   provide: f => EditorView.decorations.from(f),
 })
 
+// ── Console formatting ───────────────────────────────────────────────────────
+
+const ansi = {
+  cyan:  s => `\x1b[36m${s}\x1b[0m`,
+  grey:  s => `\x1b[90m${s}\x1b[0m`,
+  red:   s => `\x1b[31m${s}\x1b[0m`,
+  white: s => `\x1b[37m${s}\x1b[0m`,
+  green: s => `\x1b[32m${s}\x1b[0m`,
+}
+
+function aqTypeLabel(values) {
+  for (const v of values) {
+    if (v == null) continue
+    if (v instanceof Date) return '<date>'
+    switch (typeof v) {
+      case 'number': return '<num>'
+      case 'boolean': return '<bool>'
+      default: return '<str>'
+    }
+  }
+  return '<???>'
+}
+
+function truncStr(s, max = 30) {
+  s = String(s == null ? '' : s)
+  return s.length > max ? s.slice(0, max - 1) + '…' : s
+}
+
+function formatArqueroTable(df) {
+  const cols = df.columnNames()
+  const allRows = df.objects()
+  const maxRows = 10
+  const show = allRows.slice(0, maxRows)
+  const totalRows = allRows.length
+
+  // Compute type labels from first non-null values
+  const types = cols.map(c => aqTypeLabel(allRows.map(r => r[c])))
+
+  // Build string columns: header, type, then values
+  const strCols = cols.map((c, ci) => {
+    const isNum = types[ci] === '<num>'
+    const vals = show.map(r => r[c] == null ? '' : isNum ? String(r[c]) : truncStr(r[c]))
+    const widths = [c.length, types[ci].length, ...vals.map(v => v.length)]
+    const w = Math.max(...widths)
+    const pad = isNum ? (s => s.padStart(w)) : (s => s.padEnd(w))
+    return { header: pad(c), type: pad(types[ci]), vals: vals.map(pad), isNum }
+  })
+
+  const lines = []
+  lines.push(ansi.grey(`# arquero table [${totalRows} rows x ${cols.length} cols]`))
+  lines.push('  ' + strCols.map(c => ansi.cyan(c.header)).join('  '))
+  lines.push('  ' + strCols.map(c => ansi.grey(c.type)).join('  '))
+  for (let i = 0; i < show.length; i++) {
+    lines.push('  ' + strCols.map(c => ansi.white(c.vals[i])).join('  '))
+  }
+  if (totalRows > maxRows) {
+    lines.push(ansi.grey(`  ... ${totalRows - maxRows} more rows`))
+  }
+  return lines.join('\n')
+}
+
+function formatJsonHighlighted(value, indent = 0, maxDepth = 3) {
+  if (indent > maxDepth) return ansi.grey('...')
+  const pad = '  '.repeat(indent)
+  const pad1 = '  '.repeat(indent + 1)
+
+  if (value === null) return ansi.grey('null')
+  if (value === undefined) return ansi.grey('undefined')
+  if (typeof value === 'string') return ansi.green(`"${truncStr(value, 60)}"`)
+  if (typeof value === 'number' || typeof value === 'boolean') return ansi.white(String(value))
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return ansi.grey('[]')
+    const items = value.slice(0, 20)
+    const lines = items.map(v => pad1 + formatJsonHighlighted(v, indent + 1, maxDepth))
+    if (value.length > 20) lines.push(pad1 + ansi.grey(`... ${value.length - 20} more items`))
+    return ansi.grey('[') + '\n' + lines.join(',\n') + '\n' + pad + ansi.grey(']')
+  }
+
+  if (typeof value === 'object') {
+    const keys = Object.keys(value)
+    if (keys.length === 0) return ansi.grey('{}')
+    const show = keys.slice(0, 20)
+    const lines = show.map(k => {
+      const v = formatJsonHighlighted(value[k], indent + 1, maxDepth)
+      return pad1 + ansi.cyan(k) + ansi.grey(': ') + v
+    })
+    if (keys.length > 20) lines.push(pad1 + ansi.grey(`... ${keys.length - 20} more keys`))
+    return ansi.grey('{') + '\n' + lines.join(',\n') + '\n' + pad + ansi.grey('}')
+  }
+
+  return ansi.white(String(value))
+}
+
+function formatError(err) {
+  const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+  let out = ansi.red(msg)
+  if (err instanceof Error && err.stack) {
+    const stackLines = err.stack.split('\n').filter(l => l.trim().startsWith('at '))
+    if (stackLines.length > 0) {
+      out += '\n' + stackLines.slice(0, 2).map(l => ansi.grey('  ' + l.trim())).join('\n')
+    }
+  }
+  return out
+}
+
+function formatForConsole(value) {
+  if (value === undefined) return null
+  if (value === null) return ansi.grey('null') + ' ' + ansi.grey('<null>')
+
+  // Arquero table
+  if (value && typeof value.columnNames === 'function' && typeof value.objects === 'function') {
+    return formatArqueroTable(value)
+  }
+
+  // DOM elements / plots
+  if (value instanceof Element) return ansi.grey('[html element]')
+  if (value instanceof SVGElement) return ansi.grey('[svg element]')
+
+  // Functions
+  if (typeof value === 'function') {
+    const name = value.name || 'anonymous'
+    return ansi.grey(`[function ${name}]`)
+  }
+
+  // Primitives with type annotation
+  if (typeof value === 'number') return ansi.white(String(value)) + ' ' + ansi.grey('<num>')
+  if (typeof value === 'boolean') return ansi.white(String(value)) + ' ' + ansi.grey('<bool>')
+  if (typeof value === 'string') return ansi.green(`"${truncStr(value, 60)}"`) + ' ' + ansi.grey('<str>')
+
+  // Arrays and objects
+  if (Array.isArray(value)) {
+    return ansi.grey(`# array [${value.length} items]`) + '\n' + formatJsonHighlighted(value)
+  }
+
+  return formatJsonHighlighted(value)
+}
+
+function isAssignment(code) {
+  const t = code.trim()
+  if (/^(var|let|const)\s/.test(t)) return true
+  // identifier = ... but not == or ===
+  if (/^[a-zA-Z_$][a-zA-Z0-9_$.\[\]]*\s*=[^=]/.test(t)) return true
+  return false
+}
+
 // ── xterm Console ────────────────────────────────────────────────────────────
 const replHistory = []
 let historyIdx = -1
@@ -818,10 +911,10 @@ function consoleAppend(code, err, result) {
     }
   }
   if (err) {
-    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
-    term.writeln('\x1b[31m' + msg + '\x1b[0m')
-  } else if (result !== undefined) {
-    term.writeln(String(result))
+    term.writeln(formatError(err))
+  } else if (result !== undefined && !isAssignment(code)) {
+    const formatted = formatForConsole(result)
+    if (formatted) term.writeln(formatted)
   }
   // Add to history so arrow keys can recall editor-executed code
   for (const line of lines) {
@@ -845,19 +938,16 @@ function replRun() {
   let result
   try { result = evalInSession(code) } catch (e) { err = e; displayError(e) }
   if (err) {
-    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
-    term.writeln('\x1b[31m' + msg + '\x1b[0m')
-  } else if (result !== undefined) {
-    // Rich display: tables, plots, elements → output pane; primitives → terminal
-    if (result && (typeof result === 'object' || typeof result === 'function')) {
+    term.writeln(formatError(err))
+  } else if (result !== undefined && !isAssignment(code)) {
+    // Plots and DOM elements also go to output pane for rich display
+    if (result instanceof Element) {
       display(result)
-      // Switch to Output tab so user sees it
       const outBtn = document.querySelector('[data-tab="output-content"]')
       if (outBtn) switchTab(outBtn)
-      term.writeln('\x1b[36m→ [displayed in Output pane]\x1b[0m')
-    } else {
-      term.writeln('\x1b[32m' + String(result) + '\x1b[0m')
     }
+    const formatted = formatForConsole(result)
+    if (formatted) term.writeln(formatted)
   }
   writePrompt()
 }
@@ -951,6 +1041,13 @@ term.onData((data) => {
 // Initial prompt
 writePrompt()
 
+// ── Data I/O helpers (loadCSV, loadJSON, loadFile) ───────────────────────────
+const { loadCSV, loadJSON, loadFile } = createDataIOHelpers(
+  (str) => term.writeln(str),
+  formatForConsole,
+)
+Object.assign(window, { loadCSV, loadJSON, loadFile })
+
 // ── Demo document ────────────────────────────────────────────────────────────
 
 const DEMO_DOC = `# Sales Analysis
@@ -1016,13 +1113,85 @@ function insertChunk() {
 
 window.insertChunk = insertChunk
 
-// ── CodeMirror 6 editor ─────────────────────────────────────────────────────
+function insertLoadCSVChunk() {
+  const pos = editorView.state.selection.main.head
+  const template = '\n```js\nvar data = await loadCSV()\ndisplay(data)\n```\n'
+  editorView.dispatch({
+    changes: { from: pos, insert: template },
+    selection: { anchor: pos + 16 },  // cursor on the variable name
+  })
+  editorView.focus()
+}
+
+window.insertLoadCSVChunk = insertLoadCSVChunk
+
+// ── View toggle helpers ───────────────────────────────────────────────────────
+
+function toggleConsole() {
+  const app  = document.getElementById('app')
+  const pane = document.getElementById('console-pane')
+  const hidden = pane.style.display === 'none'
+  pane.style.display = hidden ? '' : 'none'
+  app.style.gridTemplateRows = hidden
+    ? 'auto auto 1fr 220px'
+    : 'auto auto 1fr 0'
+  if (hidden) try { fitAddon.fit() } catch {}
+}
+
+function toggleOutputPane() {
+  const pane = document.getElementById('output-pane')
+  const hidden = pane.style.display === 'none'
+  pane.style.display = hidden ? '' : 'none'
+  document.getElementById('main').style.gridTemplateColumns = hidden ? '1fr 1fr' : '1fr 0'
+}
+
+// ── File tab rendering ────────────────────────────────────────────────────────
+
+function renderFileTabs() {
+  const bar     = document.getElementById('file-tabs')
+  if (!bar) return
+  const files   = FM.getAllFiles()
+  const current = FM.getCurrentFile()
+
+  bar.innerHTML = ''
+  for (const f of files) {
+    const tab = document.createElement('button')
+    tab.className = 'file-tab' + (f.id === current?.id ? ' active' : '')
+    tab.dataset.id = f.id
+
+    const name = document.createElement('span')
+    name.className = 'tab-name'
+    name.textContent = f.name
+
+    const close = document.createElement('button')
+    close.className = 'tab-close'
+    close.title = 'Close'
+    close.textContent = '×'
+    close.addEventListener('click', async e => {
+      e.stopPropagation()
+      await FM.closeFile(f.id)
+    })
+
+    tab.append(name, close)
+    tab.addEventListener('click', () => FM.switchToId(f.id))
+    bar.appendChild(tab)
+  }
+
+  // + new tab button
+  const newBtn = document.createElement('button')
+  newBtn.className = 'new-tab-btn'
+  newBtn.title = 'New file'
+  newBtn.textContent = '+'
+  newBtn.addEventListener('click', () => FM.newFile())
+  bar.appendChild(newBtn)
+
+  // Sync Run on Open checkbox state to current file
+  const runOnOpenItem = document.querySelector('[data-action="toggleRunOnOpen"]')
+  if (runOnOpenItem) runOnOpenItem.checked = current?.runOnOpen ?? false
+}
+
 
 const jsAnalystKeymap = Prec.highest(keymap.of([
-  {
-    key: 'Ctrl-Enter',
-    run() { runCurrentLine(); return true },
-  },
   {
     key: 'Ctrl-Shift-Enter',
     run() { runChunkAtCursor(); return true },
@@ -1035,7 +1204,20 @@ const jsAnalystKeymap = Prec.highest(keymap.of([
     key: 'Ctrl-Alt-i',
     run() { insertChunk(); return true },
   },
+  {
+    key: 'Ctrl-s',
+    run() { FM.saveFile().catch(e => displayError(e)); return true },
+  },
 ]))
+
+// Ctrl+Enter is handled by the isolated ctrlEnterExtension (created below,
+// added to the editor once, never recreated).
+// evalFn receives (code, endLine1) where endLine1 is the 1-indexed closing-fence
+// line used to anchor inline output, or null for selection-mode runs.
+const ctrlEnterExtension = createCtrlEnterExtension((code, endLine1) => {
+  runCode(code, true, endLine1 ?? null)
+  flushInlineOutputs()
+})
 
 const editorView = new EditorView({
   state: EditorState.create({
@@ -1044,6 +1226,7 @@ const editorView = new EditorView({
       basicSetup,
       markdown({ defaultCodeLanguage: javascript() }),
       oneDark,
+      ctrlEnterExtension,
       jsAnalystKeymap,
       chunkDecorationsPlugin,
       inlineOutputField,
@@ -1057,82 +1240,60 @@ const editorView = new EditorView({
   parent: editorMount,
 })
 
-// Expose for toolbar buttons
-window.runChunkAtCursor = runChunkAtCursor
+// ── File management ───────────────────────────────────────────────────────────
 
-// ── File I/O ─────────────────────────────────────────────────────────────────
+// Wire editor change listener for autosave + dirty flag
+const updateListenerExt = EditorView.updateListener.of((update) => {
+  if (update.docChanged) FM.onEditorChange()
+})
+editorView.dispatch({
+  effects: StateEffect.appendConfig.of(updateListenerExt),
+})
 
-let fileHandle = null
-let currentFilename = 'demo.md'
-const filenameEl = document.getElementById('filename')
+// ── Actions init ─────────────────────────────────────────────────────────────
 
-function setFilename(name) {
-  currentFilename = name
-  filenameEl.textContent = name
-  document.title = `${name} — JSAnalyst`
-}
+Actions.initActions({
+  FM,
+  editorView,
+  runChunkAtCursor,
+  runNextChunk,
+  runAll,
+  runAllAboveCursor,
+  runAllBelowCursor,
+  clearOutput,
+  clearSession,
+  insertChunk,
+  toggleConsole,
+  toggleOutputPane,
+  displayError,
+  undo: () => cmUndo(editorView),
+  redo: () => cmRedo(editorView),
+})
 
-const hasNativeFS = typeof window.showOpenFilePicker === 'function'
+registerShortcuts(Actions)
 
-async function openFile() {
-  try {
-    if (hasNativeFS) {
-      const [handle] = await window.showOpenFilePicker({
-        types: [{ description: 'Markdown', accept: { 'text/markdown': ['.md', '.qmd'] } }],
-      })
-      fileHandle = handle
-      const file = await handle.getFile()
-      const text = await file.text()
-      editorView.dispatch({ changes: { from: 0, to: editorView.state.doc.length, insert: text } })
-      setFilename(handle.name)
-    } else {
-      // Fallback: hidden file input
-      const input = document.createElement('input')
-      input.type = 'file'
-      input.accept = '.md,.qmd,text/markdown'
-      input.onchange = async () => {
-        const file = input.files[0]
-        if (!file) return
-        const text = await file.text()
-        editorView.dispatch({ changes: { from: 0, to: editorView.state.doc.length, insert: text } })
-        setFilename(file.name)
-      }
-      input.click()
-    }
-  } catch (e) {
-    if (e.name !== 'AbortError') displayError(e)
-  }
-}
+// ── Delegated menu handler ────────────────────────────────────────────────────
 
-async function saveFile() {
-  try {
-    if (hasNativeFS) {
-      if (!fileHandle) {
-        fileHandle = await window.showSaveFilePicker({
-          suggestedName: currentFilename,
-          types: [{ description: 'Markdown', accept: { 'text/markdown': ['.md', '.qmd'] } }],
-        })
-      }
-      const writable = await fileHandle.createWritable()
-      await writable.write(editorView.state.doc.toString())
-      await writable.close()
-      setFilename(fileHandle.name)
-    } else {
-      // Fallback: download
-      const blob = new Blob([editorView.state.doc.toString()], { type: 'text/markdown' })
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(blob)
-      a.download = currentFilename
-      a.click()
-      URL.revokeObjectURL(a.href)
-    }
-  } catch (e) {
-    if (e.name !== 'AbortError') displayError(e)
-  }
-}
+document.querySelector('.menubar').addEventListener('sl-select', e => {
+  const action = e.detail.item.dataset.action
+  if (action && Actions[action]) Actions[action]()
+})
 
-window.openFile = openFile
-window.saveFile = saveFile
+// Sync Run on Open checkbox before the Run menu opens
+document.getElementById('run-dropdown').addEventListener('sl-show', () => {
+  const item = document.querySelector('[data-action="toggleRunOnOpen"]')
+  if (item) item.checked = FM.getCurrentFile()?.runOnOpen ?? false
+})
 
-// Run all on load
-runAll()
+// ── File manager init ─────────────────────────────────────────────────────────
+
+FM.init(editorView, document.getElementById('filename'), {
+  clearOutput,
+  runAll,
+  consolePrint: str => term.writeln(str),
+  onFilesChanged:  renderFileTabs,
+}).then(() => {
+  renderFileTabs()
+  runAll()
+})
+

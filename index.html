@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="sl-theme-dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -45,55 +45,147 @@
 
     #app {
       display: grid;
-      grid-template-rows: 38px 1fr 220px;
+      grid-template-rows: auto auto 1fr 220px;
       height: 100vh;
       overflow: hidden;
     }
 
-    /* ── Toolbar ─────────────────────────────────────────────────────────── */
+    /* ── Menubar ───────────────────────────────────────────────────────── */
 
-    #toolbar {
+    .menubar {
       display: flex;
       align-items: center;
-      gap: 6px;
-      padding: 0 14px;
+      gap: 0;
+      padding: 0 8px;
       background: var(--bg-surface);
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
+      --sl-panel-background-color: var(--bg-surface);
+      --sl-panel-border-color: var(--border);
+      --sl-color-neutral-0:   #1e1e2e;
+      --sl-color-neutral-50:  #181825;
+      --sl-color-neutral-100: #313244;
+      --sl-color-neutral-200: #45475a;
+      --sl-color-neutral-700: #cdd6f4;
+      --sl-color-neutral-800: #cdd6f4;
+      --sl-color-neutral-900: #cdd6f4;
+      --sl-color-primary-600: #89b4fa;
     }
 
-    #app-name {
+    .app-name {
       font-weight: 700;
       font-size: 14px;
       color: var(--blue);
       letter-spacing: -0.01em;
-      margin-right: 6px;
+      padding: 0 10px 0 4px;
+      flex-shrink: 0;
     }
 
-    .sep {
-      width: 1px;
-      height: 18px;
-      background: var(--border);
-      margin: 0 2px;
-    }
-
-    button {
-      padding: 3px 10px;
-      background: var(--bg-overlay);
+    .menu-trigger {
+      background: transparent;
+      border: none;
       color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 12px;
       font-family: var(--font-ui);
-      white-space: nowrap;
+      font-size: 13px;
+      padding: 5px 10px;
+      cursor: pointer;
+      border-radius: 4px;
     }
-    button:hover:not(:disabled) { background: var(--border); }
-    button:disabled { opacity: 0.38; cursor: default; }
+    .menu-trigger:hover { background: var(--bg-overlay); }
 
-    #filename {
-      margin-left: auto;
+    .shortcut {
       color: var(--text-dim);
+      font-size: 11px;
+      font-family: var(--font-mono);
+    }
+
+    /* ── File tabs ───────────────────────────────────────────────────────── */
+
+    #file-tabs {
+      display: flex;
+      align-items: stretch;
+      gap: 0;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+      overflow-y: hidden;
+      flex-shrink: 0;
+      min-height: 30px;
+    }
+    #file-tabs::-webkit-scrollbar { height: 3px; }
+    #file-tabs::-webkit-scrollbar-track { background: transparent; }
+    #file-tabs::-webkit-scrollbar-thumb { background: var(--border); }
+
+    .file-tab {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 0 10px;
+      background: transparent;
+      border: none;
+      border-right: 1px solid var(--border);
+      border-bottom: 2px solid transparent;
+      color: var(--text-dim);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      cursor: pointer;
+      white-space: nowrap;
+      min-width: 80px;
+      border-radius: 0;
+    }
+    .file-tab:hover { background: var(--bg-overlay); color: var(--text); }
+    .file-tab.active {
+      background: var(--bg-surface);
+      color: var(--text);
+      border-bottom-color: var(--blue);
+    }
+    .file-tab.dirty .tab-name::after { content: ' *'; color: var(--yellow); }
+
+    .tab-close {
+      color: var(--text-dim);
+      font-size: 13px;
+      line-height: 1;
+      padding: 1px 2px;
+      border-radius: 3px;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.15s, color 0.15s;
+    }
+    .file-tab:hover .tab-close,
+    .file-tab.active .tab-close { opacity: 0.6; }
+    .tab-close:hover { opacity: 1 !important; color: var(--red); }
+
+    .new-tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 18px;
+      line-height: 1;
+      padding: 0 10px;
+      cursor: pointer;
+      align-self: center;
+    }
+    .new-tab-btn:hover { color: var(--text); }
+
+    /* ── Keyboard shortcuts dialog ───────────────────────────────────────── */
+
+    .shortcuts-dialog::part(base)    { --width: 460px; }
+    .shortcuts-dialog::part(panel)   { background: var(--bg-surface); border: 1px solid var(--border); }
+    .shortcuts-dialog::part(title)   { color: var(--blue); font-size: 14px; font-weight: 700; }
+    .shortcuts-dialog::part(close-button__base) { color: var(--text-dim); }
+
+    .shortcuts-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .shortcuts-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
+    .shortcuts-table td:first-child { color: var(--text); }
+    .shortcuts-table td:last-child  { color: var(--text-dim); text-align: right; white-space: nowrap; }
+
+    kbd {
+      background: var(--bg-overlay);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 1px 5px;
       font-family: var(--font-mono);
       font-size: 11px;
     }
@@ -454,52 +546,80 @@
     .chunk-output:hover .chunk-output-close { opacity: 0.7; }
     .chunk-output-close:hover { opacity: 1 !important; color: var(--red); }
 
-    /* ── Help dialog ─────────────────────────────────────────────────────── */
+    /* ── Tab buttons (output pane) ──────────────────────────────────────────── */
 
-    #help-dialog {
-      background: var(--bg-surface);
-      color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 20px 24px;
-      max-width: 420px;
-    }
-    #help-dialog::backdrop { background: rgba(0,0,0,0.5); }
-    #help-dialog h3 { color: var(--blue); margin-bottom: 12px; font-size: 14px; }
-    #help-dialog table { width: 100%; border-collapse: collapse; }
-    #help-dialog td { padding: 4px 0; font-size: 12px; }
-    #help-dialog td:first-child { padding-right: 16px; white-space: nowrap; }
-    kbd {
-      background: var(--bg-overlay);
-      border: 1px solid var(--border);
-      border-radius: 3px;
-      padding: 1px 5px;
-      font-family: var(--font-mono);
-      font-size: 11px;
-    }
   </style>
 </head>
 <body>
 
 <div id="app">
 
-  <!-- ── Toolbar ── -->
-  <div id="toolbar">
-    <span id="app-name">JSAnalyst</span>
-    <div class="sep"></div>
-    <button onclick="openFile()">Open</button>
-    <button onclick="saveFile()">Save</button>
-    <div class="sep"></div>
-    <button onclick="runChunkAtCursor()">Run Chunk</button>
-    <button onclick="runAll()">Run All</button>
-    <div class="sep"></div>
-    <button onclick="clearOutput()">Clear Output</button>
-    <button onclick="clearSession()">Clear Session</button>
-    <div class="sep"></div>
-    <button onclick="insertChunk()">+ Chunk</button>
-    <button onclick="toggleHelp()">?</button>
-    <span id="filename">demo.md</span>
-  </div>
+  <!-- ── Menubar ── -->
+  <nav class="menubar">
+    <span class="app-name">JSAnalyst</span>
+
+    <!-- File menu -->
+    <sl-dropdown>
+      <button slot="trigger" class="menu-trigger">File</button>
+      <sl-menu>
+        <sl-menu-item data-action="newFile">New <span slot="suffix" class="shortcut">Ctrl+N</span></sl-menu-item>
+        <sl-menu-item data-action="openFile">Open <span slot="suffix" class="shortcut">Ctrl+O</span></sl-menu-item>
+        <sl-menu-item data-action="saveFile">Save <span slot="suffix" class="shortcut">Ctrl+S</span></sl-menu-item>
+        <sl-menu-item data-action="saveFileAs">Save As <span slot="suffix" class="shortcut">Ctrl+Shift+S</span></sl-menu-item>
+        <sl-divider></sl-divider>
+        <sl-menu-item data-action="closeFile">Close</sl-menu-item>
+      </sl-menu>
+    </sl-dropdown>
+
+    <!-- Edit menu -->
+    <sl-dropdown>
+      <button slot="trigger" class="menu-trigger">Edit</button>
+      <sl-menu>
+        <sl-menu-item data-action="undo">Undo <span slot="suffix" class="shortcut">Ctrl+Z</span></sl-menu-item>
+        <sl-menu-item data-action="redo">Redo <span slot="suffix" class="shortcut">Ctrl+Y</span></sl-menu-item>
+        <sl-divider></sl-divider>
+        <sl-menu-item data-action="insertChunk">Insert Chunk <span slot="suffix" class="shortcut">Ctrl+Alt+I</span></sl-menu-item>
+        <sl-divider></sl-divider>
+        <sl-menu-item data-action="clearSession">Clear Session</sl-menu-item>
+      </sl-menu>
+    </sl-dropdown>
+
+    <!-- Run menu -->
+    <sl-dropdown id="run-dropdown">
+      <button slot="trigger" class="menu-trigger">Run</button>
+      <sl-menu>
+        <sl-menu-item data-action="runCurrentLine">Run Current Line/Selection <span slot="suffix" class="shortcut">Ctrl+Enter</span></sl-menu-item>
+        <sl-menu-item data-action="runCurrentChunk">Run Current Chunk <span slot="suffix" class="shortcut">Ctrl+Shift+Enter</span></sl-menu-item>
+        <sl-menu-item data-action="runAll">Run All <span slot="suffix" class="shortcut">Ctrl+Shift+A</span></sl-menu-item>
+        <sl-menu-item data-action="clearOutputAndRunAll">Clear Output and Run All <span slot="suffix" class="shortcut">Ctrl+Shift+R</span></sl-menu-item>
+        <sl-divider></sl-divider>
+        <sl-menu-item data-action="runAllAboveCursor">Run All Above</sl-menu-item>
+        <sl-menu-item data-action="runAllBelowCursor">Run All Below</sl-menu-item>
+        <sl-divider></sl-divider>
+        <sl-menu-item type="checkbox" data-action="toggleRunOnOpen">Run on Open</sl-menu-item>
+      </sl-menu>
+    </sl-dropdown>
+
+    <!-- View menu -->
+    <sl-dropdown>
+      <button slot="trigger" class="menu-trigger">View</button>
+      <sl-menu>
+        <sl-menu-item data-action="toggleConsole">Toggle Console</sl-menu-item>
+        <sl-menu-item data-action="toggleOutputPane">Toggle Output Pane</sl-menu-item>
+      </sl-menu>
+    </sl-dropdown>
+
+    <!-- Help menu -->
+    <sl-dropdown>
+      <button slot="trigger" class="menu-trigger">Help</button>
+      <sl-menu>
+        <sl-menu-item data-action="showShortcutsHelp">Keyboard Shortcuts</sl-menu-item>
+      </sl-menu>
+    </sl-dropdown>
+  </nav>
+
+  <!-- ── File tabs ── -->
+  <div id="file-tabs"></div>
 
   <!-- ── Main: Editor + Output ── -->
   <div id="main">
@@ -534,27 +654,25 @@
 
 <script type="module" src="/src/main.js"></script>
 
-<!-- Keyboard shortcuts dialog -->
-<dialog id="help-dialog">
-  <h3>Keyboard Shortcuts</h3>
-  <table>
-    <tr><td><kbd>Ctrl+Enter</kbd></td><td>Run current statement &amp; advance</td></tr>
-    <tr><td><kbd>Ctrl+Shift+Enter</kbd></td><td>Run current chunk</td></tr>
-    <tr><td><kbd>Ctrl+Shift+N</kbd></td><td>Run next chunk</td></tr>
-    <tr><td><kbd>Ctrl+Alt+I</kbd></td><td>Insert new chunk</td></tr>
-    <tr><td><kbd>Enter</kbd></td><td>Submit console input</td></tr>
-    <tr><td><kbd>&uarr; / &darr;</kbd></td><td>Console history</td></tr>
-    <tr><td><kbd>Ctrl+C</kbd></td><td>Clear console input</td></tr>
-    <tr><td><kbd>Ctrl+L</kbd></td><td>Clear console</td></tr>
+<!-- Keyboard shortcuts dialog (Shoelace) -->
+<sl-dialog label="Keyboard Shortcuts" class="shortcuts-dialog">
+  <table class="shortcuts-table">
+    <tr><td>New file</td>              <td><kbd>Ctrl+N</kbd></td></tr>
+    <tr><td>Open file</td>             <td><kbd>Ctrl+O</kbd></td></tr>
+    <tr><td>Save</td>                  <td><kbd>Ctrl+S</kbd></td></tr>
+    <tr><td>Save As</td>               <td><kbd>Ctrl+Shift+S</kbd></td></tr>
+    <tr><td>Insert chunk</td>          <td><kbd>Ctrl+Alt+I</kbd></td></tr>
+    <tr><td>Run current line/selection</td><td><kbd>Ctrl+Enter</kbd></td></tr>
+    <tr><td>Run current chunk</td>     <td><kbd>Ctrl+Shift+Enter</kbd></td></tr>
+    <tr><td>Run next chunk</td>        <td><kbd>Ctrl+Shift+N</kbd></td></tr>
+    <tr><td>Run all</td>               <td><kbd>Ctrl+Shift+A</kbd></td></tr>
+    <tr><td>Clear output &amp; run all</td><td><kbd>Ctrl+Shift+R</kbd></td></tr>
+    <tr><td>Console clear input</td>   <td><kbd>Ctrl+C</kbd></td></tr>
+    <tr><td>Console clear screen</td>  <td><kbd>Ctrl+L</kbd></td></tr>
   </table>
-  <button onclick="this.closest('dialog').close()" style="margin-top:10px">Close</button>
-</dialog>
+</sl-dialog>
 
 <script>
-function toggleHelp() {
-  const d = document.getElementById('help-dialog')
-  d.open ? d.close() : d.showModal()
-}
 function switchTab(btn) {
   const pane = btn.closest('.pane')
   pane.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'))
